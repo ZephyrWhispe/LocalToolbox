@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# 打包产物（exe 111MB 超 GitHub 100MB 限制，分发走 Release 附件）
+build/
+dist/
+build.log
+
+# 编辑器 / 工具状态
+.trae/
+.zcode/
+.vscode/
+.idea/
+
+# 清理工具备份
+_cleanup_backup/
+
+# 运行时杂项
+*.tmp
+*.log
+Thumbs.db

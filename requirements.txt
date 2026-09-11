@@ -1,0 +1,23 @@
+pywebview>=6.2
+pyftpdlib>=2.2.0
+wsgidav>=4.3.0
+cheroot>=10.0.0
+pyperclip>=1.8.2
+pystray>=0.19.5
+pillow>=10.0.0
+qrcode>=8.0
+cryptography>=42.0.0
+# 录屏视频（v3.3 ShareX 式）：MP4 编码(opencv) + 系统声音(WASAPI 经 comtypes/pycaw)
+# + 声音合并进 MP4(ffmpeg)。缺失时视频模式提示、GIF/截图不受影响
+opencv-python-headless>=4.10
+comtypes>=1.4
+pycaw>=20240210
+imageio-ffmpeg>=0.5
+# OCR（截图识别）：winrt-Python 绑定；缺失时功能自动禁用（v3.3）
+# 真机验收：Windows.Media.Ocr 中文识别依赖 winrt 全链子包，均需安装
+winrt-Windows.Media.Ocr==3.2.0
+winrt-Windows.Graphics.Imaging==3.2.0
+winrt-Windows.Storage.Streams==3.2.0
+winrt-Windows.Foundation==3.2.0
+winrt-Windows.Foundation.Collections==3.2.0
+winrt-Windows.Globalization==3.2.0

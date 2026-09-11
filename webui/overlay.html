@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>选区</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+  body { background: #05070b; }
+</style>
+</head>
+<body>
+<div id="ov-error" style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;display:none;padding:8px 18px;border-radius:8px;background:#c0392b;color:#fff;font:13px 'Microsoft YaHei UI',sans-serif;pointer-events:none;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,.5);max-width:80vw;overflow:hidden;text-overflow:ellipsis;"></div>
+<script>/*__REGION_JS__*/</script>
+<script>
+/* 遮罩引导：等待 pywebview API 就绪后启动圈选，结果回传后端。
+ * cfg 由后端注入：img（本屏截图 data URL）/ mode（shot|record）/
+ * token（遮罩标识）/ box（本显示器在虚拟桌面的物理偏移 [bx,by]）。 */
+(function () {
+  "use strict";
+  var cfg = /*__CFG_JSON__*/;
+
+  /* 窗口吸附查询钩子（region_capture.js 调用）：
+     屏幕物理坐标 → 顶层窗口物理矩形 {x,y,w,h}（虚拟桌面坐标），不可识别返回 null */
+  window.__shotSnapBox = cfg.box || [0, 0];
+  window.__shotSnapQuery = function (px, py) {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.shot_window_rect_at) return Promise.resolve(null);
+    return api.shot_window_rect_at(px, py).then(function (r) {
+      return (r && r.ok && r.data) ? r.data : null;
+    }).catch(function () { return null; });
+  };
+
+  var rect = null;
+  function showError(msg) {
+    try {
+      var el = document.getElementById("ov-error");
+      if (el) { el.textContent = msg; el.style.display = "block"; }
+    } catch (e) {}
+  }
+  function hideError() {
+    try {
+      var el = document.getElementById("ov-error");
+      if (el) { el.style.display = "none"; }
+    } catch (e) {}
+  }
+  /* 调用后端并处理失败：
+     - API 不存在/调用抛错 → 顶部错误条（否则用户只见黑屏不知成败）
+     - 返回 ok:false → 展示后端 err
+     - 长时间未响应 → 超时提示（正常成功时遮罩窗口被后端销毁，计时器随页面消失）
+     注意：只转发调用方实际给出的参数——pywebview 会把多余实参一并送往后端，
+     参数个数不符会抛 TypeError（例如给 shot_overlay_cancel 多传 5 个 None）。 */
+  function call(method) {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api[method]) {
+      showError("后端 API 不可用，请重试或重启应用（ESC 退出）");
+      return null;
+    }
+    var args = Array.prototype.slice.call(arguments, 1);
+    var p;
+    try {
+      p = api[method].apply(api, args);
+    } catch (e) {
+      showError("操作失败：" + ((e && e.message) || e) + "（ESC 退出）");
+      return null;
+    }
+    if (!p || typeof p.then !== "function") return p;
+    var settled = false;
+    p.then(function (r) {
+      settled = true;
+      if (r && r.ok === false) showError("截图失败：" + (r.err || "未知错误") + "（ESC 退出）");
+    }, function (e) {
+      settled = true;
+      showError("通信失败：" + ((e && e.message) || e) + "（ESC 退出）");
+    });
+    setTimeout(function () {
+      if (!settled) showError("后端处理超时，请重试或按 ESC 退出");
+    }, 15000);
+    return p;
+  }
+  var started = false;
+  function start() {
+    // pywebviewready 与 1500ms 兜底定时器可能都触发：必须只启动一次，
+    // 否则两层遮罩叠放、mouseup/keydown 监听重复绑定导致交互错乱
+    if (started) return;
+    started = true;
+    hideError();
+    window.RegionCapture.start({
+      imgSrc: cfg.img,
+      onRect: function (x, y, w, h) { rect = { x: x, y: y, w: w, h: h }; },
+      /* 只回传选区矩形：后端从留存的原始 PNG 无损裁剪
+         （遮罩背景是 JPEG 压缩图，前端裁剪会引入画质损失） */
+      onDone: function (url, w, h, rectInfo) {
+        // data_url 传空字符串（后端会从留存 PNG 裁剪），x/y 使用 rectInfo 的坐标
+        call("shot_overlay_done", "",
+             rectInfo ? rectInfo.x : 0, rectInfo ? rectInfo.y : 0, w, h, cfg.token);
+      },
+      onCancel: function () { call("shot_overlay_cancel", cfg.token); },
+    });
+  }
+  if (window.pywebview && window.pywebview.api) {
+    start();
+  } else {
+    window.addEventListener("pywebviewready", start);
+    setTimeout(start, 1500);   // 兜底：ready 事件缺失时也照常启动
+    setTimeout(function () {
+      if (!started) showError("初始化失败：pywebview 未就绪，请按 ESC 关闭后重试");
+    }, 3000);
+  }
+})();
+</script>
+</body>
+</html>
