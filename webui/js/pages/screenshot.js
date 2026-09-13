@@ -55,10 +55,30 @@
     if (!state.img) return;
     const box = refs.canvasBox;
     const maxW = Math.max(320, box.clientWidth - 24);
-    const cssW = Math.min(maxW, state.w);
-    const cssH = Math.max(120, cssW * state.h / state.w);
-    c.style.width = cssW + "px";
-    c.style.height = cssH + "px";
+    /* v5.5：编辑窗口高度约束——
+       常规图：宽高双约束完整放入一屏（含下方操作区，预留约 150px）；
+       极端长宽比（长截图）：完整缩放会窄到无法标注，改为保底 320px 可用宽度，
+       画布容器内部滚动（box maxHeight），页面本身不溢出、操作区固定可见。 */
+    const top = box.getBoundingClientRect().top;
+    const maxH = Math.max(160, window.innerHeight - top - 150);
+    let cssW = Math.min(maxW, state.w);
+    let cssH = cssW * state.h / state.w;
+    if (cssH > maxH) {
+      const fitW = maxH * state.w / state.h;   // 完整放入一屏所需宽度
+      if (fitW >= Math.min(maxW, 320)) {
+        cssH = maxH;
+        cssW = fitW;
+        box.style.maxHeight = "";
+      } else {
+        cssW = Math.min(maxW, 320);
+        cssH = cssW * state.h / state.w;
+        box.style.maxHeight = (maxH + 22) + "px";   // 补 padding/边框
+      }
+    } else {
+      box.style.maxHeight = "";
+    }
+    c.style.width = Math.round(cssW) + "px";
+    c.style.height = Math.round(cssH) + "px";
   }
 
   function evPos(e) {
@@ -689,6 +709,28 @@
     ws.forEach((f) => f(null));
   });
 
+  /* ---------------- v5.3 滚动截图：补上此前无人接收的三个事件 ----------------
+     后端 scroll_pick_window() 会先发 scroll_hint 再 sleep 3 秒，而 scroll_capture()
+     在后台线程里发进度与结果 —— 前端此前对这三个事件零订阅，于是：
+     ① 那 3 秒静默等待没有任何提示；② 拼接好的长图（scroll_done.data_url）被丢弃。
+     由 scripts/check_contract.py 的"后端发出但无人订阅"检查查出。 */
+  App.on("scroll_hint", (msg) => App.toast(String(msg || "准备滚动截图…"), "info", 4000));
+  App.on("scroll_progress", (d) => {
+    /* 后端只在"开始捕获"与"开始拼接"各发一次，用 toast 足够且不依赖页面状态行 */
+    const t = d && d.status === "stitching"
+      ? `正在拼接长图（${(d && d.frames) || 0} 帧）…`
+      : `正在捕获（第 ${(d && d.frames) || 0} 帧）…`;
+    App.toast(t, "info", 3000);
+  });
+  App.on("scroll_done", (d) => {
+    if (!d || d.error) { App.toast((d && d.error) || "滚动截图失败", "error", 6000); return; }
+    if (!d.data_url) return;
+    App.navigate("screenshot").then(() => {
+      if (App.shotLoadPick) App.shotLoadPick({ img: d.data_url, w: d.w, h: d.h, mode: "scroll" });
+    });
+    App.toast(`滚动截图完成（${d.frames || 0} 帧）`, "ok", 4000);
+  });
+
   /* ---------------- 录屏（GIF 动图 / MP4 视频 + 系统声音） ---------------- */
   const recUi = {
     btn: null, info: null, fps: null, fmt: null,
@@ -886,96 +928,186 @@
         return App.h("label", { class: "chk" }, afterChecks[key], " " + label);
       };
 
+      const afterModal = () => {
+        /* v5.4 O3：任务链顺序可调（cfg shot_after.order） */
+        const cfgAfter = (App.state.cfg || {}).shot_after || {};
+        let order = Array.isArray(cfgAfter.order) && cfgAfter.order.length
+          ? cfgAfter.order.slice()
+          : ["save", "copy", "copy_path", "reveal"];
+        const labels = { save: "保存文件", copy: "复制到剪贴板",
+          copy_path: "复制文件路径", reveal: "定位到文件" };
+        const orderBox = App.h("div", { style: { display: "flex", flexDirection: "column", gap: "4px", margin: "6px 0" } });
+        function renderOrder() {
+          orderBox.innerHTML = "";
+          order.forEach((k, i) => {
+            orderBox.appendChild(App.h("div", { class: "row", style: { margin: "0", flexWrap: "nowrap" } },
+              App.h("span", { class: "hint mono", style: { width: "18px", flex: "none" } }, String(i + 1)),
+              App.h("span", { style: { flex: "1" } }, labels[k] || k),
+              App.h("button", { class: "btn xs", disabled: i === 0, title: "上移",
+                onclick: () => { [order[i - 1], order[i]] = [order[i], order[i - 1]]; renderOrder(); } }, "▲"),
+              App.h("button", { class: "btn xs", disabled: i === order.length - 1, title: "下移",
+                onclick: () => { [order[i + 1], order[i]] = [order[i], order[i + 1]]; renderOrder(); } }, "▼"),
+            ));
+          });
+          /* v5.4 O3：顺序即时持久化（勾选亦即时生效，行为一致） */
+          App.tryCall("shot_set_after", null, null, null, null, null, order.slice());
+        }
+        renderOrder();
+        return App.modal({
+          title: "截图后自动任务（ShareX 式）",
+          body: App.h("div",
+            { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+            mkAfter("save", "保存文件", "区域/全屏/窗口截图完成后自动保存原图到截图目录"),
+            mkAfter("copy", "复制到剪贴板", "截图完成后自动把原图写入系统剪贴板"),
+            mkAfter("edit", "载入编辑器", "截图完成后自动打开截图页画布进行标注"),
+            mkAfter("copy_path", "复制文件路径", "自动保存后把文件路径写入剪贴板"),
+            mkAfter("reveal", "定位到文件", "自动保存后在资源管理器中定位该文件"),
+            App.h("div", { class: "hint", style: { marginTop: "4px" } },
+              "后端任务链执行顺序（仅作用于已勾选的任务）："),
+            orderBox,
+            App.h("div", { class: "hint" }, "勾选与顺序即时生效；「载入编辑器」由前端执行不受顺序影响。"),
+          ),
+          okText: "完成",
+        });
+      };
+
+      /* v5.2 P4：捕获栏精简——常驻仅 3 捕获钮 + 延迟，低频进「更多捕获 ⋯」 */
       const captureBar = App.h("div", { class: "row", style: { flexWrap: "wrap" } },
         App.h("button", { class: "btn primary", onclick: regionCapture,
           title: "每个显示器弹出圈选遮罩：单击选窗口 / 拖动自选" }, "区域截图（圈选）"),
-        App.h("button", { class: "btn", title: "按上次圈选的区域重新捕获（ShareX 上次区域）",
-          onclick: async () => {
-            const r = await App.tryCall("shot_capture_last_region");
-            if (!r.ok) { App.toast(r.err, "info"); return; }
-            await loadFromCapture(r);
-          } }, "重拍上次区域"),
-        App.h("button", { class: "btn", title: "拖动线段测量长度与角度", onclick: async () => {
-          const r = await App.tryCall("shot_region_popup", "ruler", "cursor");
-          if (!r.ok) App.toast(r.err, "error", 5000);
-        } }, "屏幕标尺"),
-        App.h("button", { class: "btn", title: "选择可滚动窗口自动滚动拼接长截图", onclick: async () => {
-          const pw = await App.tryCall("scroll_pick_window");
-          if (!pw.ok) { App.toast(pw.err, "error", 4000); return; }
-          if (!pw.data) { App.toast("未选择窗口", "info"); return; }
-          App.toast("正在滚动截图，请勿操作鼠标…", "info", 3000);
-          const r = await App.tryCall("scroll_capture", pw.data.hwnd, pw.data.direction || "down");
-          if (!r.ok) { App.toast(r.err, "error", 5000); return; }
-          if (r.data && r.data.img) {
-            const img = new Image();
-            await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = r.data.img; });
-            state.img = img;
-            state.file = null;
-            setupCanvas();
-            refs.info.textContent = `${r.data.w} × ${r.data.h}px · 滚动截图`;
-            App.toast("滚动截图完成，可在画布上标注", "ok", 4000);
-          }
-        } }, "滚动截图"),
         App.h("button", { class: "btn", onclick: () => captureWith("full") }, "全屏截图"),
         App.h("button", { class: "btn", onclick: () => captureWith("window") }, "活动窗口"),
         App.row(
           App.h("span", { class: "field-label" }, "延迟"), delayIn,
           App.h("span", { class: "field-label" }, "秒"),
         ),
-        App.h("button", { class: "btn", onclick: async () => {
-          const r = await App.tryCall("shot_set_dir", null);
-          if (r.ok) App.toast("截图目录：\n" + r.data, "ok", 5000);
-        } }, "更改保存目录"),
-        App.h("button", { class: "btn", onclick: async () => {
-          const r = await App.tryCall("shot_reveal", null);
-          if (!r.ok) App.toast(r.err, "error", 4000);
-        } }, "打开目录"),
-      );
-      const afterBar = App.h("div", { class: "row", style: { flexWrap: "wrap", marginTop: "8px" } },
-        App.h("span", { class: "field-label" }, "截图后自动："),
-        mkAfter("save", "保存文件", "区域/全屏/窗口截图完成后自动保存原图到截图目录"),
-        mkAfter("copy", "复制到剪贴板", "截图完成后自动把原图写入系统剪贴板"),
-        mkAfter("edit", "载入编辑器", "截图完成后自动打开截图页画布进行标注"),
-        mkAfter("copy_path", "复制文件路径", "自动保存后把文件路径写入剪贴板"),
-        mkAfter("reveal", "定位到文件", "自动保存后在资源管理器中定位该文件"),
+        App.h("button", { class: "btn", title: "更多捕获方式与目录设置",
+          onclick: (e) => App.overflowMenu(e.currentTarget, [
+            { label: "重拍上次区域", icon: "camera",
+              hint: "ShareX 上次区域",
+              onclick: async () => {
+                const r = await App.tryCall("shot_capture_last_region");
+                if (!r.ok) { App.toast(r.err, "info"); return; }
+                await loadFromCapture(r);
+              } },
+            { label: "屏幕标尺", icon: "edit",
+              hint: "测量长度与角度",
+              onclick: async () => {
+                const r = await App.tryCall("shot_region_popup", "ruler", "cursor");
+                if (!r.ok) App.toast(r.err, "error", 5000);
+              } },
+            { label: "滚动截图", icon: "list",
+              hint: "长截图拼接",
+              onclick: async () => {
+                const pw = await App.tryCall("scroll_pick_window");
+                if (!pw.ok) { App.toast(pw.err, "error", 4000); return; }
+                if (!pw.data) { App.toast("未选择窗口", "info"); return; }
+                App.toast("正在滚动截图，请勿操作鼠标…", "info", 3000);
+                const r = await App.tryCall("scroll_capture", pw.data.hwnd, pw.data.direction || "down");
+                if (!r.ok) { App.toast(r.err, "error", 5000); return; }
+                if (r.data && r.data.img) {
+                  const img = new Image();
+                  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = r.data.img; });
+                  state.img = img;
+                  state.file = null;
+                  setupCanvas();
+                  refs.info.textContent = `${r.data.w} × ${r.data.h}px · 滚动截图`;
+                  App.toast("滚动截图完成，可在画布上标注", "ok", 4000);
+                }
+              } },
+            "sep",
+            { label: "截图后自动任务…", icon: "settings", onclick: afterModal },
+            "sep",
+            { label: "更改保存目录", icon: "folder",
+              onclick: async () => {
+                const r = await App.tryCall("shot_set_dir", null);
+                if (r.ok) App.toast("截图目录：\n" + r.data, "ok", 5000);
+              } },
+            { label: "打开目录", icon: "folder",
+              onclick: async () => {
+                const r = await App.tryCall("shot_reveal", null);
+                if (!r.ok) App.toast(r.err, "error", 4000);
+              } },
+          ]) }, "更多捕获 ⋯"),
       );
 
-      // 工具栏
-      const tb = App.h("div", { class: "row tool-bar", style: { flexWrap: "wrap" } });
+      /* v5.5：标注工具栏两行分组（修复此前 15 控件混排、flexWrap 随意换行、
+         按钮 27px / 下拉 32px / 取色器原生高度 三种高度不齐的错乱观感）
+         行 1 = 标注工具（6 常驻 + 工具▾）+ 笔刷（颜色/粗细）
+         行 2 = 画布操作（撤销/重做/还原）+ 效果▾（圆角/灰度/反色/缩放收进菜单） */
+      const TOOL_LABEL = Object.fromEntries(TOOLS);
+      const TOOLS_MAIN = ["brush", "highlight", "rect", "arrow", "text", "mosaic"];
+      const TOOLS_MORE = TOOLS.filter(([t]) => !TOOLS_MAIN.includes(t));
+      const divider = () => App.h("span", { class: "divider",
+        style: { width: "1px", height: "18px", background: "var(--border)" } });
+      const tb = App.h("div", { class: "row tool-bar",
+        style: { flexWrap: "wrap", rowGap: "6px" } });
+      const tb2 = App.h("div", { class: "row tool-bar",
+        style: { flexWrap: "wrap", rowGap: "6px", marginTop: "6px" } });
       refs.toolbar = tb;
-      TOOLS.forEach(([t, label]) => {
+      function setTool(t) {
+        state.tool = t;
+        [tb, tb2].forEach((bar) => bar.querySelectorAll(".tool-btn")
+          .forEach((b) => b.classList.remove("active")));
+        moreToolsBtn.textContent = "工具 ▾";
+        const btn = tb.querySelector(`.tool-btn[data-tool="${t}"]`);
+        if (btn) btn.classList.add("active");
+        else if (TOOLS_MORE.some(([x]) => x === t)) {
+          moreToolsBtn.classList.add("active");
+          moreToolsBtn.textContent = TOOL_LABEL[t] + " ▾";
+        }
+      }
+      TOOLS_MAIN.forEach((t) => {
         tb.appendChild(App.h("button", {
-          class: "btn sm tool-btn" + (t === state.tool ? " active" : ""),
-          onclick: (e) => {
-            state.tool = t;
-            tb.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
-            e.currentTarget.classList.add("active");
-          },
-        }, label));
+          class: "btn sm tool-btn", "data-tool": t,
+          onclick: () => setTool(t),
+        }, TOOL_LABEL[t]));   /* v5.5 修复：TOOLS_MAIN 为扁平 id 数组，此前误用
+                                 [t, label] 解构字符串导致按钮只显示 1 个字母 */
       });
-      const color = App.h("input", { type: "color", value: state.color, title: "标注颜色" });
+      const moreToolsBtn = App.h("button", {
+        class: "btn sm tool-btn",
+        title: "更多标注工具",
+        onclick: (e) => App.overflowMenu(e.currentTarget,
+          TOOLS_MORE.map(([t, label]) => ({ label, onclick: () => setTool(t) }))),
+      }, "工具 ▾");
+      tb.appendChild(moreToolsBtn);
+      tb.appendChild(divider());
+      /* v5.5：取色器 / 粗细下拉与 .btn.sm 统一 27px 高 */
+      const color = App.h("input", {
+        type: "color", value: state.color, title: "标注颜色",
+        style: { width: "34px", height: "27px", padding: "2px",
+                 border: "1px solid var(--border)", borderRadius: "6px",
+                 background: "var(--card2)", cursor: "pointer", flex: "none" },
+      });
       color.addEventListener("input", () => { state.color = color.value; });
-      const sizeSel = App.h("select", { class: "input", style: { width: "80px" } },
+      const sizeSel = App.h("select", { class: "input",
+        style: { width: "76px", height: "27px", flex: "none" } },
         ["2", "4", "8", "16"].map((v) => App.h("option", { value: v }, v + "px")));
       sizeSel.value = "4";
       sizeSel.addEventListener("change", () => { state.size = parseInt(sizeSel.value, 10); });
-      refs.btnUndo = App.h("button", { class: "btn sm", disabled: true, onclick: undo }, "↩ 撤销");
-      refs.btnRedo = App.h("button", { class: "btn sm", disabled: true, onclick: redo }, "↪ 重做");
       tb.appendChild(color);
       tb.appendChild(sizeSel);
-      tb.appendChild(refs.btnUndo);
-      tb.appendChild(refs.btnRedo);
-      tb.appendChild(App.h("button", { class: "btn sm", onclick: resetCanvas }, "还原原图"));
-      // 图像效果与缩放（ShareX ImageEffects / Resize）
-      tb.appendChild(App.h("span", { class: "divider", style: { width: "1px", height: "18px", background: "var(--border)" } }));
-      tb.appendChild(App.h("button", { class: "btn sm", title: "圆角化边缘（可撤销）",
-        onclick: () => applyEffect("round") }, "圆角"));
-      tb.appendChild(App.h("button", { class: "btn sm", title: "黑白化（可撤销）",
-        onclick: () => applyEffect("gray") }, "灰度"));
-      tb.appendChild(App.h("button", { class: "btn sm", title: "颜色反转（可撤销）",
-        onclick: () => applyEffect("invert") }, "反色"));
-      tb.appendChild(App.h("button", { class: "btn sm", title: "按宽度等比缩放（可还原原图）",
-        onclick: applyResize }, "缩放..."));
+
+      refs.btnUndo = App.h("button", { class: "btn sm", disabled: true, onclick: undo }, "↩ 撤销");
+      refs.btnRedo = App.h("button", { class: "btn sm", disabled: true, onclick: redo }, "↪ 重做");
+      tb2.appendChild(refs.btnUndo);
+      tb2.appendChild(refs.btnRedo);
+      tb2.appendChild(App.h("button", { class: "btn sm", onclick: resetCanvas }, "还原原图"));
+      tb2.appendChild(divider());
+      const effectsBtn = App.h("button", { class: "btn sm", title: "图像效果",
+        onclick: (e) => App.overflowMenu(e.currentTarget, [
+          { label: "圆角化边缘", icon: "image", hint: "可撤销",
+            onclick: () => applyEffect("round") },
+          { label: "黑白化", icon: "image", hint: "可撤销",
+            onclick: () => applyEffect("gray") },
+          { label: "颜色反转", icon: "image", hint: "可撤销",
+            onclick: () => applyEffect("invert") },
+          "sep",
+          { label: "按宽度缩放…", icon: "filter", hint: "等比缩放（可还原原图）",
+            onclick: applyResize },
+        ]) }, "效果 ▾");
+      tb2.appendChild(effectsBtn);
+      setTool(state.tool);
 
       // 画布（初始隐藏，载入图片后显示，避免空黑块占位）
       const canvas = App.h("canvas", {
@@ -997,42 +1129,69 @@
       const info = App.h("div", { class: "hint", style: { marginTop: "8px" } }, "先截图或将历史截图载入画布，再进行标注编辑。");
       refs.info = info;
 
-      // 操作
+      /* v5.2 P4：操作行精简——保存/复制常驻，其余进「更多 ⋯」 */
+      /* v5.4 O2：上传目标扁平展开（默认图床 + 各自定义上传目标；菜单点击时动态构建） */
+      const doUpload = async (provider, label) => {
+        if (!state.img) { App.toast("请先截图", "error"); return; }
+        const url = state.canvas.toDataURL("image/png");
+        App.toast("正在上传" + (label ? "到 " + label : "") + "…", "info", 3000);
+        const r = await App.tryCall("upload_image", url, provider || undefined);
+        if (!r.ok) { App.toast(r.err, "error", 5000); return; }
+        const link = r.data.url || r.data.link || "";
+        if (link) {
+          navigator.clipboard.writeText(link).then(
+            () => App.toast("上传成功，链接已复制", "ok", 5000),
+            () => App.toast("上传成功：" + link, "ok", 8000),
+          );
+        } else {
+          App.toast("上传成功", "ok");
+        }
+      };
+      const uploadMenuItems = () => {
+        const targets = ((App.state.cfg || {}).upload_targets) || [];
+        if (!targets.length) {
+          return [{ label: "上传图床", icon: "globe",
+            hint: "上传并复制链接（可在设置添加自定义目标）",
+            onclick: () => doUpload((App.state.cfg || {}).upload_service || "imgur") }];
+        }
+        const items = [{ label: "上传图床（默认）", icon: "globe",
+          hint: "使用设置中的默认图床",
+          onclick: () => doUpload((App.state.cfg || {}).upload_service || "imgur") }];
+        targets.forEach((t, i) => {
+          items.push({ label: "上传到「" + t.name + "」", icon: "globe",
+            onclick: () => doUpload("target:" + i, t.name) });
+        });
+        return items;
+      };
       const ops = App.h("div", { class: "row", style: { marginTop: "10px", flexWrap: "wrap" } },
         App.h("button", { class: "btn primary", onclick: () => save("截图") }, "保存"),
-        App.h("button", { class: "btn", onclick: async () => {
-          const label = await App.prompt("另存为标签", "截图", "将按「日期_时间_标签.png」命名");
-          if (label != null && String(label).trim()) save(String(label).trim());
-        } }, "另存为…"),
         App.h("button", { class: "btn", onclick: copy }, "复制到剪贴板"),
-        App.h("button", { class: "btn", title: "把系统剪贴板中的图片载入编辑器", onclick: async () => {
-          const r = await App.tryCall("shot_paste_clipboard");
-          if (!r.ok) { App.toast(r.err, "info"); return; }
-          await loadFromCapture(r);
-        } }, "从剪贴板导入"),
-        App.h("button", { class: "btn", title: "将当前画布内容钉在屏幕最上层", onclick: async () => {
-          if (!state.img) { App.toast("请先截图", "error"); return; }
-          const url = state.canvas.toDataURL("image/png");
-          const r = await App.tryCall("pin_image", url);
-          if (!r.ok) { App.toast(r.err, "error", 5000); return; }
-          App.toast("已贴图到屏幕（可拖拽/缩放）", "ok");
-        } }, "贴图到屏幕"),
-        App.h("button", { class: "btn", title: "上传当前截图到图床并复制链接", onclick: async () => {
-          if (!state.img) { App.toast("请先截图", "error"); return; }
-          const url = state.canvas.toDataURL("image/png");
-          App.toast("正在上传…", "info", 3000);
-          const r = await App.tryCall("upload_image", url);
-          if (!r.ok) { App.toast(r.err, "error", 5000); return; }
-          const link = r.data.url || r.data.link || "";
-          if (link) {
-            navigator.clipboard.writeText(link).then(
-              () => App.toast("上传成功，链接已复制", "ok", 5000),
-              () => App.toast("上传成功：" + link, "ok", 8000),
-            );
-          } else {
-            App.toast("上传成功", "ok");
-          }
-        } }, "上传图床"),
+        App.h("button", {
+          class: "btn", title: "导入 / 分享 / 钉图",
+          onclick: (e) => App.overflowMenu(e.currentTarget, [
+            { label: "另存为…", icon: "filetext",
+              onclick: async () => {
+                const label = await App.prompt("另存为标签", "截图", "将按「日期_时间_标签.png」命名");
+                if (label != null && String(label).trim()) save(String(label).trim());
+              } },
+            { label: "从剪贴板导入", icon: "clipboard",
+              hint: "载入系统剪贴板图片",
+              onclick: async () => {
+                const r = await App.tryCall("shot_paste_clipboard");
+                if (!r.ok) { App.toast(r.err, "info"); return; }
+                await loadFromCapture(r);
+              } },
+            { label: "贴图到屏幕", icon: "camera",
+              hint: "钉在屏幕最上层",
+              onclick: async () => {
+                if (!state.img) { App.toast("请先截图", "error"); return; }
+                const url = state.canvas.toDataURL("image/png");
+                const r = await App.tryCall("pin_image", url);
+                if (!r.ok) { App.toast(r.err, "error", 5000); return; }
+                App.toast("已贴图到屏幕（可拖拽/缩放）", "ok");
+              } },
+            ...uploadMenuItems(),
+          ]) }, "更多 ⋯"),
       );
 
       canvas.addEventListener("mousedown", onDown);
@@ -1040,7 +1199,11 @@
       canvas.addEventListener("mouseup", onUp);
       canvas.addEventListener("mouseleave", () => { if (state.drawing) onUp(); });
       canvas.addEventListener("click", onTextClick);
-      window.addEventListener("resize", fitCanvas);
+      /* v5.3：页面不可见时不重算画布尺寸（此前窗口 resize 会对隐藏页面做 DOM 计算） */
+      window.addEventListener("resize", () => {
+        if (!el.classList.contains("active")) return;
+        fitCanvas();
+      });
 
       // 历史
       refs.history = App.h("div", { class: "list", style: { maxHeight: "300px", overflow: "auto" } });
@@ -1051,10 +1214,9 @@
           "截图后自动保存与复制；标注含画笔、高亮、形状、步进编号、马赛克与裁剪；支持 ShareX 式 MP4 / GIF 录制"),
       ));
       el.appendChild(captureBar);
-      el.appendChild(afterBar);
       el.appendChild(App.h("div", { class: "card", style: { marginTop: "12px" } },
         App.h("div", { class: "card-title" }, "编辑画布"),
-        tb, box, info, ops,
+        tb, tb2, box, info, ops,
       ));
       el.appendChild(mountRecCard());
       el.appendChild(App.sec("截图历史", [refs.history], { open: false }));

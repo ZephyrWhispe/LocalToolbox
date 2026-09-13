@@ -27,7 +27,8 @@
   function renderServer() {
     refs.srvStart.disabled = state.running;
     refs.srvStop.disabled = !state.running;
-    refs.srvFwRm.disabled = !state.fwOpen;
+    /* v5.2 P4：防火墙移除钮收进「更多 ⋯」，保留 disabled 状态供菜单项读取 */
+    if (refs.srvFwRm) refs.srvFwRm.disabled = !state.fwOpen;
     // replaceChildren 仅接受 Node/string（不能传数组），须展开
     refs.srvState.replaceChildren(
       ...(state.running
@@ -299,7 +300,7 @@
   /* ---------------- 页面注册 ---------------- */
   App.registerPage({
     id: "ftp",
-    title: "FTP",
+    title: "FTP服务",
     icon: "server",
     group: "共享服务",
 
@@ -314,7 +315,7 @@
         class: "input", type: "number", min: 1, max: 65535, value: 21, style: { width: "80px" },
       });
       refs.srvDir = App.h("input", {
-        class: "input grow", placeholder: "选择要发布的本地文件夹", style: { minWidth: "220px" },
+        class: "input grow-in", placeholder: "选择要发布的本地文件夹",
       });
       refs.srvUser = App.h("input", {
         class: "input", placeholder: "留空则匿名访问", style: { width: "150px" },
@@ -361,16 +362,21 @@
       refs.cliStatus = App.h("span", { class: "hint" }, "尚未连接");
 
       el.appendChild(App.h("div", { class: "page-head" },
-        App.h("h2", null, "FTP"),
+        App.h("h2", null, "FTP服务"),
         App.h("div", { class: "sub" }, "把本地文件夹发布为 FTP 服务器；也可作为客户端连接远程 FTP，浏览并传输文件"),
       ));
 
-      el.appendChild(App.svcCard(
+      /* v5.2 P4：页内标签「FTP 服务器 | FTP 客户端」；低频防火墙钮进更多菜单 */
+      const paneSrv = App.svcCard(
         "FTP 服务器（把本地文件夹发布为 FTP，其他设备可用 FTP 客户端访问）",
         [
           App.row(
             App.h("span", { class: "field-label" }, "监听地址："), refs.srvHost,
             App.h("span", { class: "field-label" }, "端口："), refs.srvPort,
+          ),
+          /* v5.3：共享目录此前与上面两个字段挤在同一行（7 个元素），换行后
+             路径框只剩 259px；路径这类长文本独占一行才够用 */
+          App.row(
             App.h("span", { class: "field-label" }, "共享目录："), refs.srvDir,
             App.h("button", { class: "btn", onclick: browseDir }, "浏览..."),
           ),
@@ -383,11 +389,21 @@
               "放行防火墙端口"),
           ),
         ],
-        [refs.srvStart, refs.srvStop, refs.srvFwRm, refs.srvState],
+        [
+          refs.srvStart, refs.srvStop,
+          (refs.srvFwRm = App.h("button", {
+            class: "btn", title: "本应用添加的防火墙放行规则管理",
+            onclick: (ev) => App.overflowMenu(ev.currentTarget, [
+              { label: "移除防火墙放行", icon: "x", danger: true,
+                disabled: !state.fwOpen, onclick: removeFw },
+            ]),
+          }, "更多 ⋯")),
+          refs.srvState,
+        ],
         refs.srvLog,
-      ));
+      );
 
-      el.appendChild(App.h("div", { class: "card" },
+      const paneCli = App.h("div", { class: "card" },
         App.h("div", { class: "card-title" }, "FTP 客户端（连接远程 FTP 服务器，浏览并传输文件）"),
         App.row(
           App.h("span", { class: "field-label" }, "主机："), refs.cliHost,
@@ -400,10 +416,26 @@
         refs.cliList,
         App.h("div", { class: "sep" }),
         App.row(
-          refs.cliUpload, refs.cliDownload, refs.cliNewdir, refs.cliDelete,
+          refs.cliUpload, refs.cliDownload,
+          App.h("button", {
+            class: "btn sm", title: "远程文件管理",
+            onclick: (ev) => App.overflowMenu(ev.currentTarget, [
+              { label: "新建文件夹", icon: "folder",
+                disabled: !state.connected || state.busy, onclick: newFolder },
+              { label: "删除选中", icon: "trash", danger: true,
+                disabled: !state.connected || state.busy, onclick: deleteSelected },
+            ]),
+          }, "更多 ⋯"),
           App.h("span", { class: "ml-auto" }, refs.cliStatus),
         ),
-      ));
+      );
+
+      const fnav = App.subnav([
+        { label: "FTP 服务器", el: paneSrv },
+        { label: "FTP 客户端", el: paneCli },
+      ]);
+      el.appendChild(fnav);
+      fnav.panes.forEach((p) => el.appendChild(p));
 
       /* 事件订阅 */
       App.on("ftp_log", (m) => log(m));

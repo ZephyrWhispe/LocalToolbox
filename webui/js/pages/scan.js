@@ -196,7 +196,7 @@
     id: "scan",
     title: "扫描与映射",
     icon: "radar",
-    group: "网盘与网络",
+    group: "共享服务",
 
     async mount(el) {
       refs = {};

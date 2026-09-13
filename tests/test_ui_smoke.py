@@ -9,6 +9,9 @@ import json
 import sys
 import threading
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import webview
 
@@ -40,6 +43,7 @@ window.__probe = null;
 
   const DANGLING = function (t) {
     return t.indexOf('[object Object]') >= 0 ||
+           t.indexOf('[object HTML') >= 0 ||   /* DOM 元素被 String()（v5.4 transfer 实测） */
            t.indexOf('undefined') >= 0 ||
            t.indexOf('NaN') >= 0;
   };
@@ -104,8 +108,12 @@ window.__probe = null;
 
 def main():
     bridge = Bridge()
+    # v5.3：窗口形态与生产同源（app/core/win_spec.py）——此前这里只传 width/height，
+    # 等于**从未测过生产窗口的形态**（frameless / 材质透明 / easy_drag）
+    from app.core import win_spec
     window = webview.create_window(
-        "UI 冒烟测试", ui_index(), js_api=bridge, width=1320, height=860
+        "UI 冒烟测试", ui_index(), js_api=bridge,
+        **win_spec.window_kwargs(bridge.cfg, {}, {"hidden": False}),
     )
     bridge.attach(window)
 

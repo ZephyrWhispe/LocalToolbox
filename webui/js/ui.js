@@ -11,6 +11,8 @@
         else if (k === "html") node.innerHTML = v;
         else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
         else if (k === "style" && typeof v === "object") Object.assign(node.style, v);
+        else if (typeof v === "boolean") node[k] = v;   /* 布尔属性走 property：
+          setAttribute("checked", false) 会因属性存在而渲染为勾选（垃圾清理页实测） */
         else node.setAttribute(k, v);
       }
     }
@@ -64,7 +66,19 @@
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     code: '<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>',
     key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
     palette: '<path d="M12 2a10 10 0 0 0 0 20 2 2 0 0 0 2-2 2 2 0 0 1 2-2h1a5 5 0 0 0 5-5c0-5.5-4.5-9-10-9z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16.5" cy="10.5" r="1"/>',
+    star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+    grid: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
+    list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+    terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+    moreh: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+    arrowup: '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
+    arrowleft: '<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>',
+    tree: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+    filter: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+    chevronr: '<polyline points="9 18 15 12 9 6"/>',
+    columns: '<rect x="3" y="3" width="8" height="18" rx="1"/><rect x="13" y="3" width="8" height="18" rx="1"/>',
   };
 
   function icon(name, size) {
@@ -101,7 +115,7 @@
   function modal({ title, body, input, inputs, textarea, okText, cancelText }) {
     return new Promise((resolve) => {
       const root = document.getElementById("modal-root");
-      const close = (val) => { root.innerHTML = ""; resolve(val); };
+      let close = (val) => { root.innerHTML = ""; resolve(val); };
       const content = [];
       if (body) content.push(h("div", { class: "modal-body" }, body));
 
@@ -152,8 +166,30 @@
         onclick: (e) => { if (e.target === mask) close(null); },
       }, dlg);
       root.appendChild(mask);
+      /* v5.1b：键盘支持——Esc 取消、Enter 确认（textarea 内换行除外）、自动聚焦 */
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          close(null);
+        } else if (e.key === "Enter"
+                   && !(e.target instanceof HTMLTextAreaElement)) {
+          e.preventDefault();
+          const pb = dlg.querySelector(".btn.primary");
+          if (pb) pb.click();
+        }
+      };
+      const realClose = close;
+      close = (val) => {
+        document.removeEventListener("keydown", onKey, true);
+        realClose(val);
+      };
+      document.addEventListener("keydown", onKey, true);
       if (inputEl) { inputEl.focus(); inputEl.select(); }
       else if (inputsEls.length) inputsEls[0].querySelector("input").focus();
+      else {
+        const pb = dlg.querySelector(".btn.primary");
+        if (pb) pb.focus();
+      }
     });
   }
 
@@ -162,16 +198,32 @@
 
   /* OCR 识别结果弹窗：全文（可复制）+ 逐行列表（点击复制该行） */
   function ocrResultModal(result) {
-    const text = (result && result.text) || "";
+    const processed = (result && result.text) || "";
+    const rawText = (result && result.raw_text != null) ? result.raw_text : null;
     const lines = (result && result.lines) || [];
-    if (!String(text).trim()) { toast("未识别到文字", "info", 4000); return Promise.resolve(null); }
+    let cur = processed;
+    if (!String(cur).trim()) { toast("未识别到文字", "info", 4000); return Promise.resolve(null); }
     const copy = (t) => navigator.clipboard.writeText(t)
       .then(() => toast("已复制", "ok"), () => toast("复制失败", "error"));
     const ta = h("textarea", {
       class: "input mono modal-input", rows: 8, readOnly: true,
       style: { resize: "vertical", fontFamily: "Consolas, monospace" },
-    }, text);
-    ta.value = text;   // 显式赋值，兼容 textarea 值同步差异
+    }, cur);
+    ta.value = cur;   // 显式赋值，兼容 textarea 值同步差异
+    /* v5.1：有后处理原文差异时提供「已处理 / 原始」切换 */
+    let toggle = null;
+    if (rawText != null && rawText !== processed) {
+      let showRaw = false;
+      toggle = h("button", {
+        class: "btn sm", style: { alignSelf: "flex-end" },
+        onclick: () => {
+          showRaw = !showRaw;
+          cur = showRaw ? rawText : processed;
+          ta.value = cur;
+          toggle.textContent = showRaw ? "查看已处理" : "查看原始文本";
+        },
+      }, "查看原始文本");
+    }
     const list = h("div", { class: "list", style: { maxHeight: "220px", overflow: "auto" } });
     (lines || []).forEach((ln) => {
       const r = ln.rect || {};
@@ -195,10 +247,12 @@
         h("p", { class: "hint", style: { margin: 0 } },
           `共 ${lines.length} 行文字 · 点击条目可复制单行`),
         ta,
-        h("button", {
-          class: "btn sm", style: { alignSelf: "flex-end" },
-          onclick: () => copy(text),
-        }, "复制全文"),
+        h("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } },
+          toggle,
+          h("button", {
+            class: "btn sm", onclick: () => copy(cur),
+          }, "复制全文"),
+        ),
         list,
       ),
       okText: "关闭", cancelText: "取消",
@@ -254,6 +308,64 @@
     return h("span", attrs, String(text));
   }
 
+  /* ---------------- 管理员权限统一入口（v5.4：状态栏右下角，全应用唯一） ----------------
+     背景：此前「以管理员身份重启」散落在网络页、应用管理页各一份，提示文案也不一致。
+     现统一收敛为状态栏右下角的全局芯片：非管理员 → 警示标签 + 提权重启按钮；
+     已管理员 → 绿色标签。各页面仅保留文字提示，不再自带按钮。 */
+  let _adminEl = null;
+  let _adminState = null;
+  function renderAdminChip() {
+    if (!_adminEl) return;
+    _adminEl.innerHTML = "";
+    if (_adminState === true) {
+      _adminEl.appendChild(h("span", {
+        class: "tag ok", title: "已以管理员身份运行：提权类操作（共享开关 / 卸载 UWP / 系统级清理等）不再弹 UAC",
+      }, "管理员"));
+      return;
+    }
+    _adminEl.appendChild(h("span", {
+      class: "tag warn", title: "非管理员运行：网络发现/共享开关、卸载 UWP、垃圾清理系统项、TUN 模式等操作会弹 UAC 授权框",
+    }, "非管理员"));
+    _adminEl.appendChild(h("button", {
+      class: "btn xs admin-relaunch",
+      title: "弹出一次 UAC 授权并以管理员身份重启本应用（设置与服务会保留）",
+      onclick: async function () {
+        if (this._busy) return;
+        this._busy = true; this.disabled = true;
+        const old = this.textContent; this.textContent = "重启中…";
+        try {
+          /* v5.4：不再弹确认框——UAC 授权框本身即用户确认 */
+          const r = await App.tryCall("network_relaunch_admin");
+          if (!r.ok) {
+            App.toast(r.err || "提权失败", "error", 6000);
+            this._busy = false; this.disabled = false; this.textContent = old;
+            return;
+          }
+          App.toast(r.data || "正在以管理员身份重启…", "info", 5000);
+        } catch (e) {
+          this._busy = false; this.disabled = false; this.textContent = old;
+          App.toast(e.message || String(e), "error", 6000);
+        }
+      },
+    }, "提权重启"));
+  }
+  /** 刷新右下角管理员芯片（admin 缺省时用 App.state.info 缓存）。 */
+  function refreshAdminChip(admin) {
+    if (typeof admin === "boolean") _adminState = admin;
+    else if (App.state && App.state.info && App.state.info.admin != null) {
+      _adminState = !!App.state.info.admin;
+    }
+    renderAdminChip();
+  }
+  /** 挂载到状态栏右端（启动时调用一次）。 */
+  function initAdminChip() {
+    const host = document.getElementById("status-right");
+    if (!host || _adminEl) return;
+    _adminEl = h("span", { class: "admin-chip" });
+    host.insertBefore(_adminEl, host.firstChild);
+    refreshAdminChip();
+  }
+
   /** 行容器：统一 .row 布局 */
   function row(...children) {
     return h("div", { class: "row" }, ...children);
@@ -281,19 +393,26 @@
   /**
    * 页内分段页签：把长页面按认知分组拆为互斥区块（L3 导航层）。
    * tabs: [{ label, el }] —— el 为该分区的容器元素；首签默认激活。
+   * opts.onSwitch(i)：可选，页签切换回调（i 为目标索引，含首次渲染不触发；
+   *   调用方可用于懒加载——首次激活某个 pane 时才拉数据）。
    * 返回 sticky 页签条；点击切换 .active（pane 带进场动效）。
    */
-  function subnav(tabs) {
+  function subnav(tabs, opts) {
+    opts = opts || {};
     const nav = h("div", { class: "subnav", role: "tablist" });
     const panes = [];
+    let cur = 0;
     tabs.forEach((t, i) => {
       const tab = h("button", { class: "subnav-tab", role: "tab" }, t.label);
       const pane = h("div", { class: "subnav-pane" }, t.el);
       const activate = () => {
+        if (cur === i) return;
+        cur = i;
         nav.querySelectorAll(".subnav-tab").forEach((b) => b.classList.remove("active"));
         tab.classList.add("active");
         panes.forEach((p) => p.classList.remove("active"));
         pane.classList.add("active");
+        if (opts.onSwitch) opts.onSwitch(i);
       };
       tab.addEventListener("click", activate);
       nav.appendChild(tab);
@@ -328,6 +447,80 @@
       el.classList.toggle("collapsed");
     });
     return el;
+  }
+
+  /* ---------------- 弹出菜单（v5.2：右键菜单 / 更多⋯下拉，统一内核） ---------------- */
+  let _menuEl = null;
+  function _menuCleanup() {
+    document.removeEventListener("mousedown", _menuOutside, true);
+    document.removeEventListener("keydown", _menuKey, true);
+    window.removeEventListener("resize", closeMenu);
+    window.removeEventListener("blur", closeMenu);
+  }
+  function _menuOutside(e) {
+    if (_menuEl && !_menuEl.contains(e.target)) closeMenu();
+  }
+  function _menuKey(e) {
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(); }
+  }
+  function closeMenu() {
+    if (!_menuEl) return;
+    _menuEl.remove();
+    _menuEl = null;
+    _menuCleanup();
+  }
+  function _buildMenu(items) {
+    const menu = h("div", { class: "ctx-menu", role: "menu" });
+    for (const it of (items || [])) {
+      if (it === "sep" || it === "-") {
+        menu.appendChild(h("div", { class: "ctx-sep" }));
+        continue;
+      }
+      if (!it || !it.label) continue;
+      const btn = h("div", {
+        class: "ctx-item" + (it.danger ? " danger" : "") + (it.disabled ? " disabled" : ""),
+        role: "menuitem",
+      },
+        it.icon ? h("span", { class: "ctx-ico", html: icon(it.icon, 13) }) : null,
+        h("span", { class: "ctx-label" }, it.label),
+        it.hint ? h("span", { class: "ctx-hint" }, it.hint) : null,
+      );
+      if (!it.disabled && it.onclick) {
+        btn.addEventListener("click", () => { closeMenu(); it.onclick(); });
+      }
+      menu.appendChild(btn);
+    }
+    return menu;
+  }
+
+  /**
+   * 定位弹出菜单（右键菜单 / 锚定下拉共用）。
+   * items: [{label, icon?, hint?, danger?, disabled?, onclick} | "sep"]
+   */
+  function contextMenu(items, x, y) {
+    closeMenu();
+    const menu = _buildMenu(items);
+    menu.style.visibility = "hidden";
+    document.body.appendChild(menu);
+    /* 先渲染再测量，窗口边界裁剪 */
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 6)) + "px";
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 6)) + "px";
+    menu.style.visibility = "";
+    _menuEl = menu;
+    setTimeout(() => {
+      document.addEventListener("mousedown", _menuOutside, true);
+      document.addEventListener("keydown", _menuKey, true);
+      window.addEventListener("resize", closeMenu);
+      window.addEventListener("blur", closeMenu);
+    }, 0);
+  }
+
+  /** 「更多 ⋯」下拉：以按钮为锚点展开（自动上下翻转） */
+  function overflowMenu(anchorEl, items) {
+    if (!anchorEl) return;
+    const r = anchorEl.getBoundingClientRect();
+    contextMenu(items, r.left, r.bottom + 4);
   }
 
   /* ---------------- 脱敏（手机号 / 身份证 / 银行卡） ---------------- */
@@ -411,7 +604,14 @@
         );
         list.appendChild(row);
       }
-      root.style.display = items.length ? "" : "none";
+      /* v5.3：结果面板不再"无内容就整体隐藏"。工具页（.page-flex）会把结果面板
+         拉伸到剩余高度，若此时整块是 display:none，卡片就会变成"大卡装小内容"的
+         空洞。改为常驻 + 空态提示，使工具页成为「参数区 + 结果区」的稳定工作区。 */
+      if (!items.length) {
+        list.appendChild(h("div", { class: "empty", style: { margin: "10px 0" } },
+          opts.emptyText || "运行后，结果显示在这里"));
+      }
+      root.style.display = "";
     }
     const api = {
       el: root,
@@ -518,5 +718,7 @@
     fmtTime, fmtDate, fmtBytes, maskSensitive,
     makeLog, statusTag, row, svcCard, subnav, sec,
     toolOut, toolLauncher,
+    contextMenu, overflowMenu, closeMenu,
+    initAdminChip, refreshAdminChip,
   });
 })();

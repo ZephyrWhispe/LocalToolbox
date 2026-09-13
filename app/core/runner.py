@@ -32,7 +32,9 @@ def _creationflags():
     return subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
-def run(command, timeout=None):
+def run(command, timeout=None, encoding="gbk"):
+    """执行命令。默认 GBK（控制台代码页）；winget 等输出 UTF-8 的工具
+    调用时显式传 encoding="utf-8"，否则中文会成替换符乱码。"""
     if isinstance(command, str):
         shell = True
         cmd = command
@@ -46,7 +48,7 @@ def run(command, timeout=None):
             shell=shell,
             capture_output=True,
             text=True,
-            encoding="gbk",
+            encoding=encoding,
             errors="replace",
             timeout=timeout,
             creationflags=_creationflags(),
@@ -166,7 +168,7 @@ def run_elevated(command, timeout=120):
     return CommandResult(ret_code, output, "")
 
 
-def run_powershell(script):
+def run_powershell(script, timeout=None):
     return run(
         [
             "powershell",
@@ -175,7 +177,8 @@ def run_powershell(script):
             "Bypass",
             "-Command",
             script,
-        ]
+        ],
+        timeout=timeout,
     )
 
 
@@ -193,8 +196,8 @@ def run_powershell_elevated(script, timeout=120):
     )
 
 
-def run_powershell_json(script):
-    result = run_powershell(script)
+def run_powershell_json(script, timeout=None):
+    result = run_powershell(script, timeout=timeout)
     if not result.ok:
         return None
     text = result.stdout.strip()

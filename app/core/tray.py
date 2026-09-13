@@ -1,8 +1,9 @@
 """系统托盘常驻（Windows）：pystray + Pillow 动态图标。
 
 - 关闭主窗口时隐藏到托盘而非退出；
-- 托盘菜单：显示主窗口 / 退出程序；
-- 左键单击图标也显示主窗口。
+- 托盘菜单：显示主窗口 / 服务快捷开关子菜单（v5.4 O5，可选）/ 退出程序；
+- 左键单击图标也显示主窗口；
+- 菜单为动态构建：每次打开时重新求值（服务状态实时刷新）。
 
 pystray 的 win32 后端在独立线程内自建消息循环，可在非主线程运行。
 """
@@ -47,11 +48,32 @@ def _make_icon():
     return img
 
 
+def service_submenu(label, on_action, off_action, is_on):
+    """v5.4 O5 服务快捷开关子菜单：启/停两项按 is_on() 互斥置灰。
+
+    交互同构 openlist-desktop 托盘（Submenu + 互斥启用/禁用）；
+    label 为服务名；on_action/off_action 为无参动作；is_on 为无参状态查询
+    （托盘菜单动态重建时求值，保证与后端实时一致）。pystray 缺库返回 None。
+    """
+    if not _AVAILABLE:
+        return None
+    return pystray.MenuItem(label, pystray.Menu(
+        pystray.MenuItem("开启", lambda icon=None, item=None: on_action(),
+                         enabled=lambda item: not is_on()),
+        pystray.MenuItem("停止", lambda icon=None, item=None: off_action(),
+                         enabled=lambda item: is_on()),
+    ))
+
+
 class TrayController:
-    def __init__(self, on_show=None, on_quit=None, title="LocalToolbox"):
+    def __init__(self, on_show=None, on_quit=None, title="LocalToolbox",
+                 extra_menu=None):
         self.on_show = on_show or (lambda: None)
         self.on_quit = on_quit or (lambda: None)
         self.title = title
+        # v5.4 O5：服务快捷开关子菜单（callable -> list[pystray.MenuItem]）；
+        # 动态求值——pystray 每次打开菜单时调用，保证服务状态实时刷新。
+        self._extra_menu = extra_menu
         self._icon = None
         self._thread = None
         self._quitting = False
@@ -60,16 +82,30 @@ class TrayController:
     def available(self):
         return _AVAILABLE
 
+    def _build_menu(self, icon=None):
+        """菜单项列表（动态）：显示主窗口 + 服务子菜单（可选）+ 退出程序。"""
+        if not _AVAILABLE:
+            return []
+        items = [pystray.MenuItem("显示主窗口", self._show, default=True)]
+        if self._extra_menu is not None:
+            try:
+                extra = self._extra_menu() or []
+                if extra:
+                    items.append(pystray.Menu.SEPARATOR)
+                    items.extend(extra)
+            except Exception as e:
+                log.warning("托盘服务子菜单构建失败: %s", e)
+        items.append(pystray.Menu.SEPARATOR)
+        items.append(pystray.MenuItem("退出程序", self._quit))
+        return items
+
     def start(self):
         if not _AVAILABLE or self._icon is not None:
             if not _AVAILABLE:
                 log.warning("pystray 不可用，托盘功能停用")
             return
         log.info("系统托盘已启动")
-        menu = pystray.Menu(
-            pystray.MenuItem("显示主窗口", self._show, default=True),
-            pystray.MenuItem("退出程序", self._quit),
-        )
+        menu = pystray.Menu(lambda icon=None: self._build_menu(icon))
         self._icon = pystray.Icon(
             "localtoolbox", _make_icon(), self.title, menu
         )

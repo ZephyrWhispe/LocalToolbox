@@ -316,8 +316,19 @@ class WebDavClient:
                 os.remove(local_path)  # 覆盖，先在临时文件完成后替换
             os.replace(tmp, local_path)
         except WebDavError:
+            # v5.1c：失败清理 .part 残片，避免反复失败在临时目录堆积
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
             raise
         except (http.client.HTTPException, OSError) as e:
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
             raise WebDavError(0, "下载中断：%s" % e)
         finally:
             conn.close()

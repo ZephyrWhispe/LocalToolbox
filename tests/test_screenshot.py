@@ -241,7 +241,8 @@ class TestShotApi(unittest.TestCase):
         r = self.api.shot_set_after(save=False, edit=False)
         self.assertTrue(r["ok"], r)
         self.assertEqual(r["data"], {"save": False, "copy": True, "edit": False,
-                                     "copy_path": False, "reveal": False})
+                                     "copy_path": False, "reveal": False,
+                                     "order": ["save", "copy", "copy_path", "reveal"]})
         # 恢复默认，避免影响其它用例
         self.api.cfg.set("shot_after", {"save": True, "copy": True, "edit": True})
 
@@ -468,7 +469,8 @@ class TestShotApi(unittest.TestCase):
         r = self.api.shot_set_after(copy_path=True, reveal=True)
         self.assertTrue(r["ok"], r)
         self.assertEqual(r["data"], {"save": True, "copy": True, "edit": True,
-                                     "copy_path": True, "reveal": True})
+                                     "copy_path": True, "reveal": True,
+                                     "order": ["save", "copy", "copy_path", "reveal"]})
         r2 = self.api.shot_set_after(reveal=False)   # 只动 reveal
         self.assertTrue(r2["data"]["copy_path"])
         self.assertFalse(r2["data"]["reveal"])

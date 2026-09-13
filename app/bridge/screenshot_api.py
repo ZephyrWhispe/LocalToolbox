@@ -137,7 +137,7 @@ class ShotApi:
         任一遮罩确认 / 取消即关闭全部。
         """
         mode = str(mode or "shot")
-        if mode not in ("shot", "record", "ruler"):
+        if mode not in ("shot", "record", "ruler", "ocr"):
             return {"ok": False, "err": "未知的遮罩模式：%s" % mode}
         scope = str(scope or "all")
         if self._ovs:
@@ -274,6 +274,53 @@ class ShotApi:
                     "copied": after.get("copied"),
                     "edit": self._shot_after_cfg().get("edit", True),
                 })
+            elif mode == "ocr":
+                # v5.1 截图识字：无损裁剪 → 后台线程识别 → 事件推回
+                # （前端复制全文 + ocrResultModal；长图识别可能数秒）
+                self._restore_main_window()
+                import io as _io2
+                src = ov.get("png")
+                if not src:
+                    raise ValueError("遮罩未留存原始截图")
+                from PIL import Image as _PILImage
+                cropped = _PILImage.open(_io2.BytesIO(src)).crop(
+                    (x, y, x + w, y + h))
+                buf = _io2.BytesIO()
+                cropped.save(buf, format="PNG")
+                png = buf.getvalue()
+                self.emit("shot_ocr_start", {"w": w, "h": h})
+
+                def _ocr_worker(_png=png):
+                    try:
+                        import io as _io3
+                        from ..core import ocr as ocr_mod
+                        from ..core.ocr_umi import UmiError
+                        img = _PILImage.open(_io3.BytesIO(_png))
+                        engine = str(self.cfg.get("ocr_engine", "winrt") or "winrt")
+                        kw = {}
+                        if engine == "umi":
+                            kw = {
+                                "url": str(self.cfg.get("ocr_umi_url", "") or None),
+                                "exe_path": str(self.cfg.get("ocr_umi_path", "") or ""),
+                                "autostart": bool(self.cfg.get("ocr_umi_autostart", True)),
+                            }
+                        try:
+                            res = ocr_mod.recognize_any(
+                                img, engine=engine, umi_opts=kw or None)
+                        except UmiError as e:
+                            self.emit("shot_ocr_done", {"ok": False, "err": str(e)})
+                            return
+                        merge = bool(self.cfg.get("ocr_merge_lines", True))
+                        res["raw_text"] = res["text"]
+                        res["text"] = ocr_mod.postprocess(
+                            res["text"], merge_lines=merge)
+                        res["engine"] = engine
+                        self.emit("shot_ocr_done", {"ok": True, **res})
+                    except Exception as e:
+                        self.emit("shot_ocr_done", {"ok": False, "err": str(e)})
+
+                threading.Thread(target=_ocr_worker, daemon=True,
+                                 name="shot-ocr").start()
             else:
                 self._restore_main_window()
                 bx = ov.get("box") or (0, 0, 0, 0)
@@ -421,65 +468,86 @@ class ShotApi:
         return {"ok": True, "data": None}
 
     def _shot_after_cfg(self):
-        """截图后自动任务配置（缺省：保存+复制+进编辑器；reveal/copy_path 关）。"""
+        """截图后自动任务配置（缺省：保存+复制+进编辑器；reveal/copy_path 关）。
+        v5.4 O3：order 为后端任务链执行顺序（ShareX AfterCaptureTasks 的有序数组简化）。"""
         c = self.cfg.get("shot_after")
         if not isinstance(c, dict):
             c = {}
+        default_order = ["save", "copy", "copy_path", "reveal"]
+        order = [k for k in (c.get("order") or default_order)
+                 if k in default_order]
+        for k in default_order:
+            if k not in order:
+                order.append(k)
         return {"save": bool(c.get("save", True)),
                 "copy": bool(c.get("copy", True)),
                 "edit": bool(c.get("edit", True)),
                 "copy_path": bool(c.get("copy_path", False)),
-                "reveal": bool(c.get("reveal", False))}
+                "reveal": bool(c.get("reveal", False)),
+                "order": order}
 
     def _after_shot(self, data_url):
         """After Capture 任务链（ShareX 式）：保存文件 / 复制剪贴板 /
         复制文件路径 / 在资源管理器中定位。
 
-        按声明顺序执行，单步失败不阻断其它任务。返回结果字典。
+        v5.4 O3：后端任务按 cfg shot_after.order 顺序执行（ShareX 位标志枚举的
+        有序数组简化），单步失败不阻断其它任务。返回结果字典。
         """
         after = self._shot_after_cfg()
         out = {"saved": None, "copied": False, "path_copied": False,
                "revealed": False}
-        if after.get("save"):
-            try:
-                png = screenshot.decode_data_url(str(data_url))
-                out["saved"] = screenshot.save_png(png, self._shot_dir(),
-                                                   label="截图")
-            except Exception as e:
-                log.warning("截图自动保存失败：%s", e)
-        if after.get("copy"):
-            try:
-                png = screenshot.decode_data_url(str(data_url))
-                out["copied"] = screenshot.copy_png_to_clipboard(png)
-            except Exception as e:
-                log.warning("截图自动复制失败：%s", e)
-        path = out.get("saved")
-        if path and after.get("copy_path"):
-            try:
-                import pyperclip
-                pyperclip.copy(path)
-                out["path_copied"] = True
-            except Exception as e:
-                log.warning("复制文件路径失败：%s", e)
-        if path and after.get("reveal"):
-            try:
-                ok, msg = self._open_path(os.path.dirname(path))
-                out["revealed"] = bool(ok)
-                if not ok:
-                    log.warning("定位截图文件失败：%s", msg)
-            except Exception as e:
-                log.warning("定位截图文件失败：%s", e)
+        for step in after.get("order", []):
+            if step == "save" and after.get("save"):
+                try:
+                    png = screenshot.decode_data_url(str(data_url))
+                    out["saved"] = screenshot.save_png(png, self._shot_dir(),
+                                                       label="截图")
+                except Exception as e:
+                    log.warning("截图自动保存失败：%s", e)
+            elif step == "copy" and after.get("copy"):
+                try:
+                    png = screenshot.decode_data_url(str(data_url))
+                    out["copied"] = screenshot.copy_png_to_clipboard(png)
+                except Exception as e:
+                    log.warning("截图自动复制失败：%s", e)
+            elif step == "copy_path" and after.get("copy_path"):
+                path = out.get("saved")
+                if path:
+                    try:
+                        import pyperclip
+                        pyperclip.copy(path)
+                        out["path_copied"] = True
+                    except Exception as e:
+                        log.warning("复制文件路径失败：%s", e)
+            elif step == "reveal" and after.get("reveal"):
+                path = out.get("saved")
+                if path:
+                    try:
+                        ok, msg = self._open_path(os.path.dirname(path))
+                        out["revealed"] = bool(ok)
+                        if not ok:
+                            log.warning("定位截图文件失败：%s", msg)
+                    except Exception as e:
+                        log.warning("定位截图文件失败：%s", e)
         return out
 
     def shot_set_after(self, save=None, copy=None, edit=None,
-                       copy_path=None, reveal=None):
-        """配置截图后自动任务（传 None 保持该项不变），返回生效配置。"""
+                       copy_path=None, reveal=None, order=None):
+        """配置截图后自动任务（传 None 保持该项不变），返回生效配置。
+        v5.4 O3：order 为后端任务链执行顺序数组（save/copy/copy_path/reveal）。"""
         try:
             cur = self._shot_after_cfg()
             for key, val in (("save", save), ("copy", copy), ("edit", edit),
                              ("copy_path", copy_path), ("reveal", reveal)):
                 if val is not None:
                     cur[key] = bool(val)
+            if isinstance(order, list):
+                valid = [k for k in order if k in
+                         ("save", "copy", "copy_path", "reveal")]
+                for k in ("save", "copy", "copy_path", "reveal"):
+                    if k not in valid:
+                        valid.append(k)
+                cur["order"] = valid
             self.cfg.set("shot_after", cur)
             return {"ok": True, "data": cur}
         except Exception as e:

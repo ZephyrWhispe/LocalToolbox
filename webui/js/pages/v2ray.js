@@ -461,7 +461,7 @@
     id: "v2ray",
     title: "V2rayN",
     icon: "zap",
-    group: "网盘与网络",
+    group: "代理网络",
 
     async mount(el) {
       refs = {};
@@ -536,11 +536,23 @@
         [
           App.row(
             App.h("span", { class: "field-label" }, "核心程序："), refs.binVal,
-            App.h("button", { class: "btn", onclick: pickBin }, "选择..."),
-            refs.dlBtn,
-            refs.refreshBtn,
-            refs.geoBtn,
-            App.h("button", { class: "btn", onclick: openDataDir }, "数据目录"),
+            /* v5.2 P4：核心维护类（选择/下载/更新/数据目录）收进「内核维护 ⋯」 */
+            App.h("button", {
+              class: "btn", title: "核心程序与规则库维护",
+              onclick: (ev) => App.overflowMenu(ev.currentTarget, [
+                { label: "自动下载核心", icon: "arrowup",
+                  hint: "从 GitHub 下载",
+                  onclick: () => downloadBin() },
+                { label: "下载规则库", icon: "arrowup",
+                  hint: "geoip / geosite / .srs",
+                  onclick: () => downloadGeo() },
+                { label: "检查更新", icon: "search",
+                  hint: "重新探测并检查新版本",
+                  onclick: () => refreshBins() },
+                "sep",
+                { label: "选择核心程序…", icon: "filetext", onclick: pickBin },
+                { label: "打开数据目录", icon: "folder", onclick: openDataDir },
+              ]) }, "内核维护 ⋯"),
           ),
           App.row(
             App.h("span", { class: "field-label" }, "规则库："), refs.geoVal,
@@ -576,8 +588,7 @@
 
       /* 页签 2：节点导入 */
       refs.subUrl = App.h("input", {
-        class: "input", placeholder: "订阅地址 http(s):// ...（base64 或分享链接列表）",
-        style: { flex: "1", minWidth: "220px" },
+        class: "input grow-in", placeholder: "订阅地址 http(s):// ...（base64 或分享链接列表）",
       });
       paneImport.appendChild(App.svcCard(
         "节点导入（订阅 / 剪贴板分享链接 / V2rayN 目录）",

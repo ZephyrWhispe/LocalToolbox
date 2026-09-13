@@ -41,8 +41,11 @@ class ScrollApi(BridgeBase):
                 if result:
                     png = image_to_png_bytes(result)
                     data_url = "data:image/png;base64," + base64.b64encode(png).decode()
+                    # v5.3：附带尺寸，前端载入编辑器时无需再等图片 onload 量算尺寸
                     self.emit("scroll_done", {"data_url": data_url,
-                                               "frames": len(frames)})
+                                               "frames": len(frames),
+                                               "w": int(result.width),
+                                               "h": int(result.height)})
                 else:
                     self.emit("scroll_done", {"error": "拼接失败"})
             except Exception as e:

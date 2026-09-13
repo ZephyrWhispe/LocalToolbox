@@ -14,11 +14,14 @@ DEFAULT_CLIP = "Ctrl+Alt+V"
 DEFAULT_SHOT = "Ctrl+Alt+A"
 DEFAULT_FULL = "Ctrl+Alt+F"
 DEFAULT_POP = "Win+V"
+DEFAULT_MEMO = "Ctrl+Alt+M"
+DEFAULT_OCR = "Ctrl+Alt+O"
 
 _CFG_KEYS = {"clip": "hotkey_clip", "shot": "hotkey_shot",
-             "full": "hotkey_full", "pop": "hotkey_pop"}
+             "full": "hotkey_full", "pop": "hotkey_pop",
+             "memo": "hotkey_memo", "ocr": "hotkey_ocr"}
 _SLOT_NAMES = {"clip": "剪贴板热键", "shot": "截图热键", "full": "全屏截图热键",
-               "pop": "剪贴板弹窗热键"}
+               "pop": "剪贴板弹窗热键", "memo": "备忘录热键", "ocr": "截图识字热键"}
 
 
 class HotkeyApi:
@@ -105,6 +108,27 @@ class HotkeyApi:
         except Exception as e:
             self.emit_log("剪贴板弹窗呼出失败：%s" % e)
 
+    def _memo_pop_activate(self):
+        """备忘录热键：光标处唤起快速捕捉弹窗（独立于剪贴板弹窗的实例）。"""
+        try:
+            if not hasattr(self, "_memo_pop") or self._memo_pop is None:
+                self._init_memo_pop()
+            import ctypes
+            self._memo_pop["prev_hwnd"] = int(
+                ctypes.windll.user32.GetForegroundWindow() or 0)
+            self.memo_pop_show()
+        except Exception as e:
+            self.emit_log("备忘录弹窗呼出失败：%s" % e)
+
+    def _ocr_activate(self):
+        """截图识字热键：显主窗并进入区域圈选（ocr 模式），识别后复制+弹窗。"""
+        try:
+            self._show_window()
+            if self._window is not None:
+                self._window.evaluate_js("App.hotkeyAction('ocr')")
+        except Exception as e:
+            self.emit_log("截图识字热键呼出失败：%s" % e)
+
     # -- 注册 -----------------------------------------------------------
     def _apply_slots(self):
         """按 cfg 注册全部槽位；单个失败仅记日志，不阻塞其余槽位。
@@ -113,9 +137,11 @@ class HotkeyApi:
         时自动回退 Ctrl+Alt+V，保证弹窗始终有热键可达。
         """
         handlers = {"clip": self._clip_activate, "shot": self._shot_activate,
-                    "full": self._full_activate, "pop": self._pop_activate}
+                    "full": self._full_activate, "pop": self._pop_activate,
+                    "memo": self._memo_pop_activate, "ocr": self._ocr_activate}
         defaults = {"clip": DEFAULT_CLIP, "shot": DEFAULT_SHOT,
-                    "full": DEFAULT_FULL, "pop": DEFAULT_POP}
+                    "full": DEFAULT_FULL, "pop": DEFAULT_POP,
+                    "memo": DEFAULT_MEMO, "ocr": DEFAULT_OCR}
         for slot, cb in handlers.items():
             combo = str(self.cfg.get(_CFG_KEYS[slot]) or defaults[slot])
             try:
@@ -140,7 +166,8 @@ class HotkeyApi:
     def hotkey_set(self, slot, combo):
         """设置槽位热键（持久化 + 立即热注册）。
 
-        slot: "clip" | "shot" | "full" | "pop"；combo 如 "Ctrl+Alt+V" / "Win+V"。
+        slot: "clip" | "shot" | "full" | "pop" | "memo" | "ocr"；
+        combo 如 "Ctrl+Alt+V" / "Win+V"。
         返回 {ok, combo, stolen}：stolen=True 表示系统占用后已转钩子接管。
         """
         key = _CFG_KEYS.get(str(slot))
@@ -150,7 +177,8 @@ class HotkeyApi:
         if not combo:
             return {"ok": False, "err": "快捷键不能为空"}
         handlers = {"clip": self._clip_activate, "shot": self._shot_activate,
-                    "full": self._full_activate, "pop": self._pop_activate}
+                    "full": self._full_activate, "pop": self._pop_activate,
+                    "memo": self._memo_pop_activate, "ocr": self._ocr_activate}
         cb = handlers[slot]
         old_combo = self._current_combo(slot)
         try:

@@ -245,9 +245,20 @@
   }
 
   let addingManual = false;
+  /* v5.2 P4：手动添加设备改弹窗入口（不再常驻表单） */
   async function addManual() {
     if (addingManual) return;
-    const ip = refs.ipInput.value.trim();
+    const vals = await App.modal({
+      title: "手动添加设备",
+      body: "对方设备不在发现列表时，可手动输入其 IP 直连同步。",
+      inputs: [
+        { label: "设备 IP", placeholder: "192.168.1.23" },
+        { label: "同步端口", type: "number", value: "41891" },
+      ],
+      okText: "添加",
+    });
+    if (!vals) return;
+    const ip = (vals[0] || "").trim();
     if (!ip) { App.toast("请输入设备 IP", "error"); return; }
     // IP 逐段校验：每段 0-255 且拒绝前导零
     const segs = ip.split(".");
@@ -258,14 +269,14 @@
       return n >= 0 && n <= 255;
     });
     if (!ipOk) { App.toast("请输入合法的 IPv4 地址", "error"); return; }
-    const port = parseInt(refs.portInput.value, 10) || 41891;
+    const port = parseInt(vals[1], 10) || 41891;
     if (port < 1 || port > 65535) { App.toast("端口需在 1-65535 之间", "error"); return; }
     addingManual = true;
     try {
       const r = await App.tryCall("clip_add_manual", ip, port);
       if (!r.ok) { App.toast(r.err, "error"); return; }
       log(`已添加手动设备 ${ip}:${port}`);
-      refs.ipInput.value = "";
+      App.toast(`已添加设备 ${ip}:${port}`, "ok");
     } finally {
       addingManual = false;
     }
@@ -305,14 +316,11 @@
       el.innerHTML = "";
       refs.sendTgl = App.h("input", { type: "checkbox", onchange: (e) => { state.send = e.target.checked; } });
       refs.recvTgl = App.h("input", { type: "checkbox", onchange: (e) => { state.recv = e.target.checked; } });
-      refs.ipInput = App.h("input", { class: "input", placeholder: "192.168.1.23", style: { width: "180px" } });
-      refs.portInput = App.h("input", { class: "input", type: "number", value: 41891, style: { width: "90px" } });
       refs.stateLine = App.h("div", { class: "row" });
       refs.devList = App.h("div", { class: "list" });
       refs.histList = App.h("div", { class: "list" });
       refs.search = App.h("input", {
-        class: "input", placeholder: "搜索历史…",
-        style: { width: "200px" },
+        class: "input grow-in", placeholder: "搜索历史…",
         oninput: (e) => { state.search = e.target.value; renderHistory(); },
       });
       refs.log = App.h("div", { class: "log-box", style: { maxHeight: "110px" } }, "同步日志…");
@@ -328,6 +336,7 @@
         html: App.icon("send", 14) + "<span>启动同步</span>",
       });
       refs.stop = App.h("button", { class: "btn", onclick: stopSync }, "停止");
+      /* v5.2 P4：控制与设备合并为一张状态卡；手动添加设备改弹窗入口 */
       el.appendChild(App.h("div", { class: "card" },
         App.h("div", { class: "card-title" }, "同步控制"),
         App.row(
@@ -338,22 +347,21 @@
           App.h("span", { class: "hint ml-auto" }, "启动时自动放行防火墙端口"),
         ),
         refs.stateLine,
-        App.row(
-          App.h("span", { class: "hint" }, "手动添加设备（IP，端口默认 41891）："),
-          refs.ipInput, refs.portInput,
-          App.h("button", { class: "btn sm", onclick: addManual }, "添加"),
-        ),
-      ));
-
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "card-title" }, "局域网设备"),
+        App.h("div", { class: "sep" }),
+        App.h("div", { class: "card-title", style: { fontSize: "13px" } }, "局域网设备"),
         refs.devList,
+        App.row(
+          App.h("button", { class: "btn sm", onclick: addManual }, "+ 手动添加设备"),
+          App.h("span", { class: "hint" }, "发现失败时可手动输入对方 IP（端口默认 41891）"),
+        ),
       ));
 
       el.appendChild(App.h("div", { class: "card" },
         App.h("div", { class: "card-title" },
           "剪贴板历史（点击条目回贴）",
-          App.h("span", { style: { marginLeft: "auto", display: "flex", gap: "6px" } },
+          /* v5.3：外层容器此前是收缩宽度（内容定宽），导致里面的搜索框
+             无法伸展成"整行可用宽度"；给它 flex:1 让输入框有空间可长 */
+          App.h("span", { style: { marginLeft: "auto", display: "flex", gap: "6px", flex: "1", minWidth: "0", justifyContent: "flex-end" } },
             refs.search,
             App.h("button", {
               class: "btn sm danger", onclick: async () => {

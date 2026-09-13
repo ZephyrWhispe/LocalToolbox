@@ -26,17 +26,21 @@ App.registerPage({
 var state = { dataUrls: [], result: null, direction: "vertical", gap: 0, bgColor: "#FFFFFF" };
 
 function mount(el) {
-  var toolbar = h("div", {class: "row", style: {gap: "8px", marginBottom: "12px", flexWrap: "wrap"}},
+  el.classList.add("page-flex", "canvas-page");   // v5.3：画布页铺满内容区
+  var toolbar = h("div", {class: "row", style: {gap: "8px", flexWrap: "wrap"}},
     h("button", {class: "btn sm", onclick: pickFiles}, "选择图片"),
-    h("select", {id: "combine-dir", onchange: function(e) { state.direction = e.target.value; }},
+    /* v5.3：这几个控件此前没有 .input 类，在深色主题下会渲染成系统原生的
+       白底下拉框/输入框；标签也不用裸 <label>，与其它页面的 .field-label 对齐 */
+    h("select", {class: "input", id: "combine-dir", onchange: function(e) { state.direction = e.target.value; }},
       h("option", {value: "vertical"}, "垂直拼接"),
       h("option", {value: "horizontal"}, "水平拼接"),
       h("option", {value: "grid"}, "网格拼接")),
-    h("label", {}, "间距:"),
-    h("input", {type: "number", value: "0", min: "0", max: "100",
-      style: {width: "60px"}, onchange: function(e) { state.gap = parseInt(e.target.value) || 0; }}),
-    h("label", {}, "背景色:"),
-    h("input", {type: "color", value: "#FFFFFF",
+    h("span", {class: "field-label"}, "间距:"),
+    h("input", {class: "input", type: "number", value: "0", min: "0", max: "100",
+      style: {width: "68px"}, onchange: function(e) { state.gap = parseInt(e.target.value) || 0; }}),
+    h("span", {class: "field-label"}, "背景色:"),
+    h("input", {class: "input", type: "color", value: "#FFFFFF",
+      style: {width: "44px", padding: "2px"},
       onchange: function(e) { state.bgColor = e.target.value; }}),
     h("button", {class: "btn sm accent", onclick: doCombine}, "合并"),
     h("button", {class: "btn sm", onclick: saveResult}, "保存结果")
@@ -48,9 +52,13 @@ function mount(el) {
   preview.appendChild(canvas);
   state.previewEl = preview;
 
-  el.appendChild(toolbar);
-  el.appendChild(fileList);
-  el.appendChild(preview);
+  el.appendChild(h("div", {class: "page-head"},
+    h("h2", null, "图片合并"),
+    h("div", {class: "sub"}, "多张图片按垂直 / 水平 / 网格拼接，可设间距与背景色")));
+  el.appendChild(h("div", {class: "card"}, toolbar));
+  el.appendChild(h("div", {class: "card fill"},
+    h("div", {class: "card-title"}, "待合并图片（可拖拽调整顺序）"),
+    fileList, preview));
   state.fileListEl = fileList;
 }
 

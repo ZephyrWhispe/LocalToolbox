@@ -1,4 +1,5 @@
 # LocalToolbox - Start Script (PowerShell)
+Set-Location $PSScriptRoot
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  LocalToolbox - Start Script" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
@@ -17,11 +18,11 @@ try {
 # Check dependencies
 Write-Host "[2/3] Checking dependencies..." -ForegroundColor Yellow
 try {
-    python -c "import pywebview, PIL, cv2" 2>$null
+    python -c "import webview, PIL, cv2" 2>$null
     Write-Host "[OK] Core dependencies OK" -ForegroundColor Green
 } catch {
     Write-Host "[INFO] Missing dependencies, installing..." -ForegroundColor Yellow
-    pip install -r requirements.txt
+    python -m pip install -r requirements.txt
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Dependency installation failed" -ForegroundColor Red
         Read-Host "Press Enter to exit"
@@ -40,7 +41,7 @@ Write-Host "  - Right-click tray icon to fully exit" -ForegroundColor Gray
 Write-Host ""
 
 # Start application
-Set-Location $PSScriptRoot
+
 python main.py
 
 if ($LASTEXITCODE -ne 0) {

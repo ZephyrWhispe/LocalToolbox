@@ -2,11 +2,13 @@
 """P2-2 剪贴板历史 SQLite 落盘测试：存储单测 + ClipboardSync 接入 + 重启恢复。
 
 含图片条目删除/清空时同步清理落盘文件（v2.7 低优先级改进）。
+v5.4 O9：存量文本全量加解密迁移（migrate）。
 """
 
 import io
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import time
@@ -302,6 +304,98 @@ class TestEncryption(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(d, "clip_enc.key")))
         k2 = clip_store_key(d)
         self.assertEqual(k1, k2, "同一用户的 DPAPI 密钥应可解出原值")
+
+
+class TestStoreMigrateO9(unittest.TestCase):
+    """v5.4 O9：存量文本全量加解密迁移。"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="clip-mig-")
+        self.path = os.path.join(self.dir, "history.db")
+        self.key = os.urandom(32)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _seed(self):
+        st = ClipboardStore(self.path, limit=100)
+        for i, txt in enumerate(("明文一", "明文二", "secret-3")):
+            st.insert({"ts": 100.0 + i, "device": "本机", "hash": txt[-8:],
+                       "remote": False, "kind": "text", "text": txt,
+                       "img_path": None})
+        st.insert({"ts": 103.0, "device": "本机", "hash": "img1",
+                   "remote": False, "kind": "image", "text": "",
+                   "img_path": "x.png"})
+        return st
+
+    def _raw_texts(self):
+        conn = sqlite3.connect(self.path)
+        try:
+            return [r[0] for r in
+                    conn.execute("SELECT text FROM clip_history "
+                                 "WHERE kind='text' ORDER BY ts")]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _texts(entries):
+        return sorted(e["text"] for e in entries
+                      if e.get("kind") == "text" and "text" in e)
+
+    def test_01_enable_encrypts_existing(self):
+        st = self._seed()
+        try:
+            st.key = self.key
+            n = st.migrate(encrypt=True)
+            self.assertEqual(n, 3)
+            raw = self._raw_texts()
+            self.assertTrue(all(t.startswith("enc:v1:") for t in raw))
+            # load() 解密回明文
+            self.assertEqual(self._texts(st.load(10)),
+                             ["secret-3", "明文一", "明文二"])
+            # 备份文件已生成
+            self.assertTrue(os.path.isfile(self.path + ".bak"))
+        finally:
+            st.close()
+
+    def test_02_disable_decrypts(self):
+        st = self._seed()
+        try:
+            st.key = self.key
+            st.migrate(encrypt=True)
+            n = st.migrate(encrypt=False)
+            self.assertEqual(n, 3)
+            self.assertEqual(self._raw_texts(), ["明文一", "明文二", "secret-3"])
+            st.key = None
+            entries = st.load(10)
+            self.assertEqual(self._texts(entries),
+                             ["secret-3", "明文一", "明文二"])
+            self.assertFalse(any(e.get("enc_lost") for e in entries))
+        finally:
+            st.close()
+
+    def test_03_encrypt_without_key_raises(self):
+        st = self._seed()
+        try:
+            with self.assertRaises(RuntimeError):
+                st.migrate(encrypt=True)
+        finally:
+            st.close()
+
+    def test_04_restart_with_key_reads(self):
+        st = self._seed()
+        st.key = self.key
+        st.migrate(encrypt=True)
+        st.close()
+        # 模拟重启：新实例带 key 打开 → 可解密读取
+        st2 = ClipboardStore(self.path, limit=100, key=self.key)
+        try:
+            entries = st2.load(10)
+            self.assertEqual(self._texts(entries),
+                             ["secret-3", "明文一", "明文二"])
+            self.assertFalse(any(e.get("enc_lost") for e in entries))
+        finally:
+            st2.close()
 
 
 if __name__ == "__main__":

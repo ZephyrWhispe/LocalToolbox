@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import threading
 
@@ -58,6 +59,12 @@ DEFAULTS = {
     "clip_autostart": False,  # 启动后自动开启剪贴板同步（收发全开，v3.5e）
     "win_on_top": False,  # 主窗口置顶（v3.5e）
     "ui_reduce_motion": False,  # 减少动画（全局禁用过渡/动画，v3.5e）
+    # v5.3 UI 治理开关：页面可见性守卫（false = 各页面定时器/监听完全按改造前行为
+    # 运行，即"离开页面也照跑"，用于出问题时不发版回退）
+    "ui_ctx_guard": True,
+    # 窗口材质：auto（按系统能力自动）/ off（不透明）/ blur（Win10 模糊）/ mica（Win11）
+    # 仅在探测确认支持时才会创建透明窗口；失败自动降级为不透明
+    "ui_material": "auto",
     "clip_retain_days": 0,  # 剪贴板历史保留天数（0=永久，插入时按 ts 清理，v3.5f）
     "win_remember": False,  # 记住主窗口大小与位置（v3.5f）
     "win_geometry": {},  # 窗口几何 {x,y,width,height}（后端关闭时写入，v3.5f）
@@ -78,9 +85,13 @@ DEFAULTS = {
     "cliphist_limit": 500,  # 剪贴板历史上限条数
     "cliphist_monitor_images": True,  # 剪贴板历史同时记录图片
     "cliphist_retain_days": 30,  # 剪贴板历史保留天数（0=永久）
-    "upload_service": "imgur",  # 默认图床：imgur / custom
+    "clip_cmds": [],  # 剪贴板条目自定义命令模板（v5.4 O4，≤5 条：{name, cmd}，{text} 变量）
+    "ipc_enabled": False,  # 本地 IPC 只读接口（v5.4 二期，默认关；仅监听 127.0.0.1）
+    "ipc_port": 17258,  # IPC 监听端口（仅回环）
+    "upload_service": "imgur",  # 默认图床：imgur / custom / target:<index>（v5.4 O2）
     "upload_custom_url": "",  # 自定义图床上传接口
     "upload_custom_key": "",  # 自定义图床 API Key
+    "upload_targets": [],  # 自定义上传目标（v5.4 O2，≤10：name/url/method/body/headers/file_field/arguments/url_path/url_regex）
     "batch_output_dir": "",  # 批量处理输出目录（空 = 源文件同目录）
     "video_output_dir": "",  # 视频编辑输出目录
     # -- 工具箱重构（v4.5） ------------------------------------------------
@@ -96,6 +107,26 @@ DEFAULTS = {
     "km_edge_switch": True,  # 边缘穿越总开关（滑出屏幕边缘切换目标 / 切回本机）
     "km_edge_margin": 4,  # 边缘判定宽度（物理像素，1–50）
     "km_edges": {},  # 边缘邻居表 {left/right/top/bottom: 被控端 ip}
+    # -- 备忘录 / 密码库 / 备份 / 文件收藏（v5.0） --------------------------
+    "hotkey_memo": "Ctrl+Alt+M",  # 备忘录快速捕捉弹窗热键
+    "memo_pop_group_last": 0,  # 弹窗上次保存的分组 id（记忆）
+    "vault_autolock_min": 15,  # 密码库空闲自动锁定分钟数（0=不锁）
+    "vault_clip_clear_sec": 30,  # 复制密码后自动清剪贴板秒数（0=不清除）
+    "backup_targets": [  # 云备份目标（并行）：openlist=复用网盘账号；webdav=独立配置
+        {"type": "openlist", "name": "网盘", "url": "", "user": "",
+         "pwd": "", "dir": "LocalToolboxBackup", "enabled": True},
+    ],
+    "backup_keep": 10,  # 每目标保留的备份份数（1–50）
+    "backup_autoupload": False,  # 自动定期云备份
+    "backup_autoupload_hours": 24,  # 自动备份间隔小时（6–720）
+    "file_favs": [],  # 文件管理收藏路径 [{name, path}]（cap 20）
+    # -- OCR 升级（v5.1） --------------------------------------------------
+    "hotkey_ocr": "Ctrl+Alt+O",  # 截图识字热键（圈选→识别→复制+弹窗）
+    "ocr_engine": "winrt",  # 识别引擎：winrt（内置）/ rapid（本地包）/ umi（Umi-OCR HTTP）
+    "ocr_merge_lines": True,  # 文本后处理：中文相邻行智能合并
+    "ocr_umi_url": "http://127.0.0.1:1224",  # Umi-OCR HTTP 服务地址
+    "ocr_umi_path": "",  # Umi-OCR.exe 路径（下载内核后自动写入）
+    "ocr_umi_autostart": True,  # 识别时 Umi 服务未运行则自动拉起内核
 }
 
 
@@ -142,20 +173,38 @@ class AppConfig:
         self.load()
 
     def load(self):
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-        except (OSError, ValueError):
-            return
-        if isinstance(loaded, dict):
-            merged = dict(DEFAULTS)
-            merged.update(loaded)
-            self.data = merged
+        """加载配置；主文件损坏时自动回滚 .bak（v5.4 O8，Clash Verge Draft 思想的最小落地）。"""
+        candidates = [self.path, self.path + ".bak"]
+        for i, path in enumerate(candidates):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if isinstance(loaded, dict):
+                merged = dict(DEFAULTS)
+                merged.update(loaded)
+                self.data = merged
+                if i == 1:
+                    # 主文件损坏、从备份恢复（O8 验收路径）
+                    import logging
+                    logging.getLogger("config").warning(
+                        "配置主文件损坏，已从备份恢复：%s", self.path)
+                return
+        # 主文件与备份均不可用 → 保持 DEFAULTS
 
     def save(self):
         with self._lock:
             try:
                 os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                # v5.4 O8：写前备份——当前主文件为合法 JSON 时复制为 .bak
+                if os.path.isfile(self.path):
+                    try:
+                        with open(self.path, "r", encoding="utf-8") as f:
+                            json.load(f)
+                        shutil.copy2(self.path, self.path + ".bak")
+                    except (OSError, ValueError):
+                        pass  # 主文件不存在或已损坏时跳过备份
                 tmp = self.path + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(self.data, f, ensure_ascii=False, indent=2)
@@ -169,5 +218,8 @@ class AppConfig:
         return DEFAULTS.get(key, default)
 
     def set(self, key, value):
-        self.data[key] = value
+        # v5.1c：写 data 与 save 的 dump 都要持锁，否则并发 set 期间
+        # json.dump 迭代 dict 会抛 RuntimeError 穿透到前端
+        with self._lock:
+            self.data[key] = value
         self.save()

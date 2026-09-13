@@ -6,6 +6,7 @@ scan_api / network_api / file_api / km_api / transfer_api / log_api /
 tools_api / screenshot_api。
 """
 
+import os
 import socket
 import threading
 
@@ -13,6 +14,7 @@ from ..core import clash_core as cc
 from ..core.config import AppConfig
 from ..core.discovery import Discoverer
 from .base import BridgeBase
+from .backup_api import BackupApi
 from .batch_api import BatchApi
 from .clash_api import ClashApi
 from .clipboard_api import ClipboardApi
@@ -22,10 +24,13 @@ from .combine_api import CombineApi
 from .dns_api import DnsApi
 from .editor_api import EditorApi
 from .file_api import FileApi
+from .firewall_api import FirewallApi
 from .ftp_api import FtpApi
 from .hotkey_api import HotkeyApi
 from .km_api import KmApi
 from .log_api import LogApi
+from .memo_api import MemoApi
+from .memo_pop_api import MemoPopApi
 from .network_api import NetworkApi
 from .pan_api import PanApi
 from .pin_api import PinApi
@@ -42,11 +47,18 @@ from .tools_api import ToolsApi
 from .transfer_api import TransferApi
 from .update_api import UpdateApi
 from .upload_api import UploadApi
+from .optimize_api import OptimizeApi
+from .vault_api import VaultApi
 from .video_api import VideoEditApi
 from .web_api import WebApi
+from .cap_api import CapApi
 from .win_api import WindowApi
 
-APP_VERSION = "3.0"
+APP_VERSION = "5.1b"
+
+# v5.4 O7：整机配置导出脱敏清单（顶层键 / backup_targets 子键）
+CFG_SENSITIVE_KEYS = {"rclone_pwd", "upload_custom_key"}
+CFG_SENSITIVE_SUBKEYS = {"pwd", "password", "key"}
 
 
 def _local_ips():
@@ -59,11 +71,11 @@ def _local_ips():
                 ips.append(ip)
     except OSError:
         pass
+    # v5.1c：socket 用 with 确保异常路径也释放（app_info 高频调用，泄漏会累积句柄）
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("10.255.255.255", 1))
-        ip = s.getsockname()[0]
-        s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            ip = s.getsockname()[0]
         if ip not in ips:
             ips.insert(0, ip)
     except OSError:
@@ -104,6 +116,13 @@ class Bridge(
     UploadApi,
     VideoEditApi,
     DnsApi,
+    MemoApi,
+    VaultApi,
+    MemoPopApi,
+    BackupApi,
+    CapApi,
+    FirewallApi,
+    OptimizeApi,
 ):
     def __init__(self):
         # 通过第一个混入类的 MRO 调用 BridgeBase.__init__
@@ -132,6 +151,7 @@ class Bridge(
         self._init_proxy()
         self._init_rec()
         self._init_win()
+        self._init_cap()
         self._init_update()
         self._init_routing()
         self._init_editor()
@@ -145,13 +165,31 @@ class Bridge(
         self._init_upload()
         self._init_video()
         self._init_dns()
+        self._init_memo()
+        self._init_optimize()
+        self._init_vault()
+        self._init_backup()
+        self._init_memo_pop()
+        self._init_firewall()
+        # v5.4 二期：本地 IPC 只读接口（默认关；开启时随应用启动，仅回环）
+        from ..core import ipc_server
+        if self.cfg.get("ipc_enabled", False):
+            try:
+                ipc_server.start(self.cfg.get("ipc_port", 17258))
+            except OSError as e:
+                self.emit_log("IPC 接口启动失败：%s" % e)
         # v3.2：按配置恢复 OpenList 服务与 rclone 挂载（后台线程，不阻塞启动）
         threading.Thread(target=self._pan_autostart_restore, daemon=True, name="pan-autostart").start()
         # v3.5e：按配置自动开启剪贴板同步（后台线程，防火墙/绑定不阻塞启动）
         threading.Thread(target=self._clip_autostart, daemon=True, name="clip-autostart").start()
+        # v5.1b：按配置自启被控端监听（km_allow 开启时）
+        threading.Thread(target=self._km_autostart, daemon=True, name="km-autostart").start()
 
     def shutdown(self):
         """应用退出前清理（线程收束，避免子线程/UI 对象在进程退出时被错误线程销毁）。"""
+        # v5.4 二期：本地 IPC 接口收束
+        from ..core import ipc_server
+        ipc_server.stop()
         self.hotkey.stop()
         self._stop_pan()
         self._stop_proxy()
@@ -164,12 +202,29 @@ class Bridge(
                 self._pop["win"].destroy()
         except Exception:
             pass
+        # v5.0：备忘录弹窗常驻窗口销毁
+        try:
+            if getattr(self, "_memo_pop", None) and self._memo_pop.get("win"):
+                self._memo_pop["win"].destroy()
+        except Exception:
+            pass
+        # v5.1：Umi-OCR 内核服务收束
+        try:
+            from ..core import ocr_umi
+            ocr_umi.stop_server()
+        except Exception:
+            pass
         if getattr(self, "_rec", None) and self._rec.running:
             self._rec.stop()
         if getattr(self, "_pin_mgr", None):
             self._pin_mgr.shutdown()
         if getattr(self, "_clip_monitor", None):
             self._clip_monitor.stop()
+        # v5.1b：被控端监听 socket 与 KM 钩子线程收束
+        try:
+            self._km_target.stop()
+        except Exception:
+            pass
         self._stop_clash()
         self.discovery.stop()
 
@@ -255,13 +310,15 @@ class Bridge(
         return {"ok": True, "data": devices}
 
     def device_alias(self, device_id, name):
-        aliases = self.cfg.get("aliases", {}) or {}
         name = str(name or "").strip()
-        if name:
-            aliases[str(device_id)] = name
-        else:
-            aliases.pop(str(device_id), None)
-        self.cfg.set("aliases", aliases)
+        with self.cfg._lock:  # v5.1c：读-改-写原子化，并发设置不丢别名
+            aliases = dict(self.cfg.get("aliases", {}) or {})
+            if name:
+                aliases[str(device_id)] = name
+            else:
+                aliases.pop(str(device_id), None)
+            self.cfg.data["aliases"] = aliases
+        self.cfg.save()
         return {"ok": True, "data": name}
 
     def cfg_get(self):
@@ -272,7 +329,7 @@ class Bridge(
             "theme", "history_limit", "desensitize", "start_page",
             "save_dir", "screenshot_dir", "auto_accept", "require_pairing",
             "hud_enabled", "clip_encrypt", "hotkey_enabled",
-            "hotkey_clip", "hotkey_shot",
+            "hotkey_clip", "hotkey_shot", "hotkey_full",
             # v3.2：OpenList / Rclone / 自启动
             "openlist_host", "openlist_port", "openlist_fw", "openlist_autostart",
             "rclone_bin", "rclone_autostart", "rclone_user", "rclone_pwd",
@@ -294,12 +351,22 @@ class Bridge(
             "editor_last_dir", "pin_opacity", "pin_click_through",
             "cliphist_monitor_images", "cliphist_retain_days",
             "upload_service", "upload_custom_url", "upload_custom_key",
+            "upload_targets", "clip_cmds", "ipc_enabled", "ipc_port",
             "batch_output_dir", "video_output_dir",
             # v4.5：工具箱收藏与最近使用（列表键，白名单过滤见下）
             "tool_favs", "tool_recent",
             # v4.7：键鼠共享设置
             "km_allow", "km_lock_input", "km_edge_switch", "km_edge_margin",
             "km_edges",
+            # v5.0：备忘录 / 密码库 / 备份 / 文件收藏
+            "hotkey_memo", "memo_pop_group_last", "vault_autolock_min",
+            "vault_clip_clear_sec", "backup_targets", "backup_keep",
+            "backup_autoupload", "backup_autoupload_hours", "file_favs",
+            # v5.1：OCR
+            "hotkey_ocr", "ocr_engine", "ocr_merge_lines",
+            "ocr_umi_url", "ocr_umi_path", "ocr_umi_autostart",
+            # v5.2：文件管理标签会话（「继续上次浏览」）
+            "file_tabs",
         }
         if key not in allowed:
             return {"ok": False, "err": "不支持的配置项：%s" % key}
@@ -319,7 +386,8 @@ class Bridge(
             value = str(value)
         if key == "theme":
             value = str(value) if str(value) in ("auto", "light", "dark") else "dark"
-        if key in ("hotkey_clip", "hotkey_shot", "hotkey_pop"):
+        if key in ("hotkey_clip", "hotkey_shot", "hotkey_pop", "hotkey_memo",
+                   "hotkey_ocr", "hotkey_full"):
             from ..core.hotkey import parse_combo as _parse_combo
             try:
                 value = _parse_combo(str(value))[2]  # 存规范显示名
@@ -333,12 +401,37 @@ class Bridge(
             value = bool(value)
         if key == "clip_encrypt":
             value = bool(value)
-            # 热切换 store 密钥：开启后用 DPAPI 密钥（新的历史即加密，旧明文保留）；
-            # 关闭后置 None（历史中的密文条目显示为「已加密」，数据仍在）
-            if hasattr(self, "clip") and getattr(self.clip, "store", None) is not None:
+            # v5.4 O9：开关切换即全量迁移（开启：存量明文加密；关闭：密文解密回明文）
+            # 迁移前自动备份库文件（store.migrate 内实现），失败抛错不落配置
+            st = getattr(self.clip, "store", None)
+            if st is not None:
                 from ..core.clipboard_store import clip_store_key
                 from ..core.config import DATA_HOME
-                self.clip.store.key = clip_store_key(DATA_HOME) if value else None
+                if value:
+                    k = clip_store_key(DATA_HOME)
+                    if k is None:
+                        return {"ok": False,
+                                "err": "加密密钥初始化失败（DPAPI 不可用），未开启加密"}
+                    st.key = k
+                try:
+                    self._clip_migrated = st.migrate(encrypt=value)
+                except RuntimeError as e:
+                    return {"ok": False, "err": str(e)}
+                if not value:
+                    st.key = None  # 迁移回明文后再摘除密钥
+        if key in ("ipc_enabled", "ipc_port"):
+            # v5.4 二期：IPC 开关/端口变更即时生效（停止旧监听后按新配置重启）
+            from ..core import ipc_server
+            ipc_server.stop()
+            enabled = bool(value) if key == "ipc_enabled" \
+                else bool(self.cfg.get("ipc_enabled", False))
+            port = value if key == "ipc_port" \
+                else self.cfg.get("ipc_port", 17258)
+            if enabled:
+                try:
+                    ipc_server.start(port)
+                except (OSError, ValueError) as e:
+                    return {"ok": False, "err": "IPC 接口启动失败：%s" % e}
         if key == "save_dir":
             value = str(value)
         if key == "screenshot_dir":
@@ -509,5 +602,203 @@ class Bridge(
             t = getattr(self, "_km_target", None)
             if t is not None and hasattr(t, "set_lock_input"):
                 t.set_lock_input(value)
+        # v5.0 备忘录 / 密码库 / 备份 / 文件收藏 -----------------------------
+        if key == "memo_pop_group_last":
+            try:
+                value = max(0, int(value))
+            except (TypeError, ValueError):
+                value = 0
+        if key == "vault_autolock_min":
+            try:
+                value = max(0, min(1440, int(value)))
+            except (TypeError, ValueError):
+                return {"ok": False, "err": "自动锁定需为数字（分钟，0=不锁）"}
+        if key == "vault_clip_clear_sec":
+            try:
+                value = max(0, min(600, int(value)))
+            except (TypeError, ValueError):
+                return {"ok": False, "err": "清除秒数需为数字（0=不清除）"}
+        if key == "backup_keep":
+            try:
+                value = max(1, min(50, int(value)))
+            except (TypeError, ValueError):
+                return {"ok": False, "err": "保留份数需为数字（1–50）"}
+        if key == "backup_autoupload":
+            value = bool(value)
+        if key == "backup_autoupload_hours":
+            try:
+                value = max(6, min(720, int(value)))
+            except (TypeError, ValueError):
+                return {"ok": False, "err": "间隔需为数字（小时，6–720）"}
+        if key == "backup_targets":
+            from ..core.cloud_backup import normalize_targets
+            if not isinstance(value, (list, tuple)):
+                return {"ok": False, "err": "备份目标需为列表"}
+            value = normalize_targets(value)
+        if key == "file_favs":
+            if not isinstance(value, (list, tuple)):
+                return {"ok": False, "err": "收藏路径需为列表"}
+            favs, seen = [], set()
+            for f in value:
+                if isinstance(f, dict) and f.get("path"):
+                    p = str(f["path"]).strip()[:500]
+                    if p and p not in seen:
+                        seen.add(p)
+                        favs.append({"name": str(f.get("name") or "").strip()[:32]
+                                     or os.path.basename(p.rstrip("\\/")) or p,
+                                     "path": p})
+            value = favs[:20]
+        # v5.1 OCR -----------------------------------------------------------
+        if key == "ocr_engine":
+            value = str(value) if str(value) in ("winrt", "rapid", "umi") else "winrt"
+        if key in ("ocr_merge_lines", "ocr_umi_autostart"):
+            value = bool(value)
+        if key in ("ocr_umi_url", "ocr_umi_path"):
+            value = str(value or "").strip()
         self.cfg.set(key, value)
+        if key == "clip_encrypt":
+            # v5.4 O9：附带全量迁移条数（前端 toast 提示）
+            return {"ok": True, "data": value,
+                    "migrated": getattr(self, "_clip_migrated", 0)}
         return {"ok": True, "data": value}
+
+    # -- 整机配置导出/导入（v5.4 O7，Clash Verge 配置域 / v2rayN 发布完整性思想） --
+    def cfg_export_pick(self):
+        """选择导出文件保存路径。"""
+        from tkinter import filedialog
+        import time as _t
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            initialfile="LocalToolbox_config_%s.json" % _t.strftime("%Y%m%d_%H%M%S"),
+            filetypes=[("JSON", "*.json"), ("所有文件", "*.*")])
+        if not path:
+            return {"ok": False, "err": "未选择保存路径"}
+        return {"ok": True, "data": {"path": path}}
+
+    def cfg_export(self, path=None, sanitize=True):
+        """导出全部配置域为单文件 JSON：版本号 + 脱敏选项 + SHA-256 校验和。"""
+        import hashlib
+        import json
+        import time as _t
+
+        from ..core.config import DATA_HOME
+        data = dict(self.cfg.data)
+        if sanitize:
+            for k in CFG_SENSITIVE_KEYS:
+                data.pop(k, None)
+            if isinstance(data.get("backup_targets"), list):
+                data["backup_targets"] = [
+                    {kk: ("" if str(kk) in CFG_SENSITIVE_SUBKEYS else vv)
+                     for kk, vv in t.items()} if isinstance(t, dict) else t
+                    for t in data["backup_targets"]]
+        payload = {
+            "app": "LocalToolbox",
+            "version": APP_VERSION,
+            "exported_ts": _t.time(),
+            "sanitize": bool(sanitize),
+            "data": data,
+        }
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+        payload["checksum"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if not path:
+            path = os.path.join(
+                DATA_HOME, "exports", "config_%s.json" % _t.strftime("%Y%m%d_%H%M%S"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            return {"ok": False, "err": "写入导出文件失败：%s" % e}
+        return {"ok": True, "data": {"path": path, "count": len(data),
+                                     "sanitize": bool(sanitize)}}
+
+    def cfg_import_pick(self):
+        """选择要导入的配置文件。"""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            filetypes=[("JSON", "*.json"), ("所有文件", "*.*")])
+        if not path:
+            return {"ok": False, "err": "未选择文件"}
+        return {"ok": True, "data": {"path": path}}
+
+    def cfg_import(self, path, strategy="skip_existing"):
+        """导入整机配置：逐键经 cfg_set 合并（复用全部校验与热生效副作用）。
+
+        strategy：skip_existing=存量优先（已有非默认值保留）/ overwrite=导入优先。
+        导出文件的 SHA-256 校验和先验后并；未知键跳过。导入过程每键独立落盘，
+        中途失败不产生半更新配置文件（cfg.set 为原子写 + .bak）。
+        """
+        import hashlib
+        import json
+
+        from ..core.config import DEFAULTS
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, ValueError) as e:
+            return {"ok": False, "err": "读取配置文件失败：%s" % e}
+        if (not isinstance(payload, dict) or payload.get("app") != "LocalToolbox"
+                or not isinstance(payload.get("data"), dict)):
+            return {"ok": False, "err": "文件格式不正确（不是本应用导出的配置文件）"}
+        body = json.dumps({k: v for k, v in payload.items() if k != "checksum"},
+                          ensure_ascii=False, sort_keys=True, indent=2)
+        if hashlib.sha256(body.encode("utf-8")).hexdigest() != payload.get("checksum"):
+            return {"ok": False, "err": "校验和不匹配：文件已损坏或被修改"}
+        if strategy not in ("skip_existing", "overwrite"):
+            return {"ok": False, "err": "合并策略无效"}
+        merged, skipped, failed = 0, 0, []
+        for k, v in payload["data"].items():
+            if k not in DEFAULTS or k in ("win_geometry",):
+                skipped += 1
+                continue
+            if strategy == "skip_existing":
+                cur = self.cfg.data.get(k)
+                if cur not in (None, "") and cur != DEFAULTS.get(k):
+                    skipped += 1
+                    continue
+            # 显式走类方法（兼容最小桩测试环境：实例上无 cfg_set 绑定）
+            r = Bridge.cfg_set(self, k, v)
+            if r.get("ok"):
+                merged += 1
+            else:
+                failed.append("%s（%s）" % (k, r.get("err") or ""))
+        return {"ok": True, "data": {
+            "merged": merged, "skipped": skipped, "failed": failed,
+            "version": str(payload.get("version") or ""),
+            "sanitize": bool(payload.get("sanitize")),
+        }}
+
+    # -- 服务总览（v5.4 O11：聚合各服务现有状态 API，单次查询） ----------------
+    def svc_overview(self):
+        """聚合服务状态：同步 / OpenList / WebDAV 挂载 / FTP / HTTP 共享 / 双代理。
+
+        各服务沿用现有 *_state/get_state API；单项异常不影响其余项（置 None）。
+        """
+        def pick(fn, keys):
+            try:
+                r = fn()
+                if isinstance(r, dict) and r.get("ok"):
+                    d = r.get("data") or {}
+                    out = {k: d.get(k) for k in keys}
+                    out["ready"] = True
+                    return out
+            except Exception:
+                pass
+            return {"ready": False}
+
+        mounts = []
+        try:
+            r = self.pan_rclone_state()
+            if isinstance(r, dict) and r.get("ok"):
+                mounts = r["data"].get("mounts") or []
+        except Exception:
+            pass
+        return {"ok": True, "data": {
+            "clip": pick(self.clip_get_state, ("running", "send", "recv")),
+            "openlist": pick(self.pan_get_state, ("running", "port")),
+            "webdav": {"ready": True, "mounts": mounts},
+            "ftp": pick(lambda: self.ftp_state(), ("server",)),
+            "http": pick(self.web_get_state, ("running", "port", "urls")),
+            "clash": pick(self.clash_get_state, ("running", "sys_proxy", "mode", "mixed_port")),
+            "v2ray": pick(self.proxy_get_state, ("running", "proc_alive")),
+        }}

@@ -94,8 +94,7 @@
         style: { width: "90px" },
       });
       refs.dir = App.h("input", {
-        class: "input", placeholder: "选择要发布的本地文件夹",
-        style: { flex: "1", minWidth: "200px" },
+        class: "input grow-in", placeholder: "选择要发布的本地文件夹",
       });
       refs.user = App.h("input", {
         class: "input", placeholder: "留空则匿名访问", style: { width: "150px" },
@@ -107,7 +106,7 @@
       refs.fwTgl = App.h("input", { type: "checkbox", checked: true });
       refs.start = App.h("button", { class: "btn primary", onclick: startServer }, "启动服务器");
       refs.stop = App.h("button", { class: "btn", disabled: true, onclick: stopServer }, "停止");
-      refs.fwRm = App.h("button", { class: "btn", disabled: true, onclick: removeFw }, "移除防火墙放行");
+      /* v5.2 P4：fwRm/修复认证收进「更多 ⋯」菜单（在下方 actions 行创建） */
       refs.state = App.h("span", null);
       refs.url = App.h("span", { class: "mono", style: { color: "var(--accent)", userSelect: "text" } });
       refs.authLabel = App.h("span", { class: "hint" });
@@ -134,15 +133,21 @@
       el.appendChild(App.svcCard(
         "Web 服务器（HTTP 浏览 + WebDAV 挂载，把本地文件夹发布为 Web 站点）",
         [
+          /* v5.3：此前 6 个元素挤在一行，换行后"共享目录"路径框只剩 219px。
+             按语义拆行：监听地址+端口 / 共享目录（独行长路径） / 账号信息 */
           App.row(
             App.h("span", { class: "field-label" }, "监听地址："), refs.host,
             App.h("span", { class: "field-label" }, "端口："), refs.port,
+          ),
+          App.row(
             App.h("span", { class: "field-label" }, "共享目录："), refs.dir,
             browseBtn,
           ),
           App.row(
             App.h("span", { class: "field-label" }, "用户名："), refs.user,
             App.h("span", { class: "field-label" }, "密码："), refs.pwd,
+          ),
+          App.row(
             App.h("label", { class: "switch" }, refs.writeTgl, App.h("span", { class: "track" }),
               "允许写入（未勾选则只读）"),
             App.h("label", { class: "switch" }, refs.fwTgl, App.h("span", { class: "track" }),
@@ -151,14 +156,24 @@
           App.h("div", { class: "hint", style: { whiteSpace: "pre-line", marginTop: "10px" } },
             "浏览器直接访问上方地址可浏览/下载文件；Windows 资源管理器可挂载 WebDAV：\n" +
             "     命令行执行  net use X: http://本机IP:端口  （或浏览器打开后复制地址）\n" +
-            "提示：用「用户名+密码」访问时，Windows 默认禁止通过 http 发送账号，可点下方按钮修复（需管理员权限）。"),
+            "提示：用「用户名+密码」访问时，Windows 默认禁止通过 http 发送账号，可在「更多 ⋯」中修复（需管理员权限）。"),
           App.row(
             refs.authLabel,
-            App.h("span", { class: "grow" }),
-            App.h("button", { class: "btn", onclick: fixAuth }, "修复 Windows WebDAV http 账号认证"),
           ),
         ],
-        [refs.start, refs.stop, refs.fwRm, refs.state, refs.url],
+        [refs.start, refs.stop,
+          /* v5.2 P4：低频维护收进「更多 ⋯」 */
+          (refs.fwRm = App.h("button", {
+            class: "btn", title: "防火墙规则管理",
+            onclick: (ev) => App.overflowMenu(ev.currentTarget, [
+              { label: "修复 Windows WebDAV http 账号认证", icon: "settings",
+                hint: "需管理员权限",
+                onclick: fixAuth },
+              { label: "移除防火墙放行", icon: "x", danger: true,
+                disabled: !state.fwOpen, onclick: removeFw },
+            ]),
+          }, "更多 ⋯")),
+          refs.state, refs.url],
         refs.log,
       ));
 

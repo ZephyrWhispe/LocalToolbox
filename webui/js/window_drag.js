@@ -33,4 +33,64 @@
       e.stopPropagation();
     }
   }, false);
+
+  /* ---------------- v5.3 边缘缩放 ----------------
+     主窗口是无边框（FormBorderStyle.None），系统不提供缩放边框，
+     **用户此前无法拖边调整窗口大小**（只能最大化，或改配置里的几何记忆）。
+
+     实现方式与 pywebview 自带 easy_drag 同路数：mousemove 逐帧调桥接，
+     后端用 pywebview 的 window.move/resize 落地。刻意不用 WM_NCLBUTTONDOWN ——
+     那条路在 WebView2 上因鼠标捕获不在本进程而拖不动（见 win_begin_drag 注释）。
+
+     坐标只传"增量"（screenX/Y 差值），避免与 DPI / pywebview 坐标系换算打架。 */
+  var EDGE = 5;                 // 边缘命中宽度（CSS px）
+  var MIN_W = 680, MIN_H = 460; // 与后端 win_resize_by 的下限保持一致
+  var rz = null;
+
+  function edgeAt(x, y) {
+    var w = window.innerWidth, h = window.innerHeight;
+    var L = x <= EDGE, R = x >= w - EDGE, T = y <= EDGE, B = y >= h - EDGE;
+    if (!L && !R && !T && !B) return "";
+    return (T ? "top" : B ? "bottom" : "") + (L ? "left" : R ? "right" : "");
+  }
+
+  function onRzMove(e) {
+    if (!rz) return;
+    var dx = e.screenX - rz.sx, dy = e.screenY - rz.sy;
+    var w = rz.w + (rz.R ? dx : 0) + (rz.L ? -dx : 0);
+    var h = rz.h + (rz.B ? dy : 0) + (rz.T ? -dy : 0);
+    if (w < MIN_W) { w = MIN_W; if (rz.L) dx = rz.w - MIN_W; }
+    if (h < MIN_H) { h = MIN_H; if (rz.T) dy = rz.h - MIN_H; }
+    var dw = w - rz.sw, dh = h - rz.sh;
+    var mx = rz.L ? dx - rz.smx : 0, my = rz.T ? dy - rz.smy : 0;
+    rz.sw = w; rz.sh = h;
+    if (rz.L) rz.smx = dx;
+    if (rz.T) rz.smy = dy;
+    if (mx || my) App.tryCall("win_move_by", mx, my);
+    if (dw || dh) App.tryCall("win_resize_by", dw, dh);
+  }
+
+  function onRzUp() {
+    rz = null;
+    window.removeEventListener("mousemove", onRzMove);
+    window.removeEventListener("mouseup", onRzUp);
+  }
+
+  // 捕获阶段：抢在 easy_drag 的 window mousedown（以及上面的拦截）之前处理边缘
+  document.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    var edge = edgeAt(e.clientX, e.clientY);
+    if (!edge) return;
+    e.preventDefault();
+    e.stopPropagation();
+    rz = {
+      L: edge.indexOf("left") >= 0, R: edge.indexOf("right") >= 0,
+      T: edge.indexOf("top") >= 0, B: edge.indexOf("bottom") >= 0,
+      sx: e.screenX, sy: e.screenY,
+      w: window.innerWidth, h: window.innerHeight,
+      sw: window.innerWidth, sh: window.innerHeight, smx: 0, smy: 0,
+    };
+    window.addEventListener("mousemove", onRzMove);
+    window.addEventListener("mouseup", onRzUp);
+  }, true);
 })();

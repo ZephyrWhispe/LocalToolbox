@@ -11,6 +11,7 @@ DPAPI 保护，仅本机当前用户可解。
 
 import base64
 import os
+import shutil
 import sqlite3
 import sys
 import threading
@@ -234,6 +235,52 @@ class ClipboardStore:
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             except sqlite3.Error:
                 return 0
+
+    def migrate(self, encrypt=True):
+        """存量文本条目全量加解密迁移（v5.4 O9）。
+
+        encrypt=True（开启加密）：明文条目 → enc:v1:（需已设 key）；
+        encrypt=False（关闭加密）：enc:v1: 条目 → 明文（需 key 解密，解不开置空）。
+        迁移前复制库文件为 <path>.bak（O9 风险缓解：迁移失败可手工回滚）；
+        行级更新在单事务内完成，失败自动 rollback。返回迁移条数，失败抛 RuntimeError。
+        """
+        if encrypt and not self.key:
+            raise RuntimeError("未设置加密密钥，无法开启迁移")
+        with self._lock:
+            # 迁移前备份（文件级：即使事务外断电也可手工恢复）
+            try:
+                if os.path.isfile(self.path):
+                    shutil.copy2(self.path, self.path + ".bak")
+            except OSError:
+                pass  # 备份失败不阻断迁移（事务本身可回滚）
+            try:
+                if encrypt:
+                    rows = self._conn.execute(
+                        "SELECT id, text FROM clip_history "
+                        "WHERE kind='text' AND text IS NOT NULL "
+                        "AND text NOT LIKE 'enc:v1:%' AND text != ''"
+                    ).fetchall()
+                    pairs = [(_encrypt_text(t, self.key), i) for i, t in rows]
+                else:
+                    rows = self._conn.execute(
+                        "SELECT id, text FROM clip_history "
+                        "WHERE kind='text' AND text LIKE ?",
+                        ("enc:v1:%",)).fetchall()
+                    pairs = []
+                    for i, t in rows:
+                        plain = _decrypt_text(t, self.key) if self.key else None
+                        pairs.append((plain or "", i))
+                self._conn.executemany(
+                    "UPDATE clip_history SET text=? WHERE id=?", pairs)
+                self._conn.commit()
+                return len(pairs)
+            except Exception as e:
+                try:
+                    self._conn.rollback()
+                except sqlite3.Error:
+                    pass
+                raise RuntimeError("历史加解密迁移失败（已回滚，备份在 %s.bak）: %s"
+                                   % (self.path, e))
 
     def _prune(self):
         # 超出上限时删除最旧记录（按 ts 倒序保留 limit 条）；v3.5f：同时按天数清理

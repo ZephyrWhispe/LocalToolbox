@@ -13,7 +13,9 @@
 
   /* ---------------- 渲染 ---------------- */
   function renderStatus() {
-    refs.stateLine.replaceChildren(
+    /* v5.4 修复：此前把元素数组整个传给 replaceChildren（期望展开），实际被
+       String() 成 "[object HTMLSpanElement]" 文本节点显示在服务状态行 */
+    refs.stateLine.replaceChildren(...(
       state.running
         ? [
             App.statusTag("接收就绪", "ok", "check"),
@@ -22,7 +24,7 @@
         : [
             App.statusTag("未就绪"),
             App.h("span", { class: "hint" }, "传输服务未启动，无法接收文件"),
-          ],
+          ]),
     );
     refs.saveDirText.textContent = state.saveDir || "（默认：系统下载目录）";
     refs.autoTgl.checked = state.autoAccept;
@@ -464,89 +466,96 @@
         ),
       ));
 
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "card-title" }, "手动发送（IP 直连）"),
-        App.h("p", { class: "hint", style: { margin: "0 0 8px" } },
-          "对方设备不在发现列表时可手动输入 IP 直连发送（跨网段 / 多网卡场景）。"),
-        App.h("div", { class: "row" },
-          App.h("span", { class: "field-label" }, "目标 IP："),
-          (refs.ipInput = App.h("input", { class: "input mono", placeholder: "192.168.1.23", style: { width: "150px" } })),
-          App.h("span", { class: "field-label" }, "端口："),
-          (refs.portInput = App.h("input", { class: "input mono", value: "41893", style: { width: "90px" } })),
-          App.h("button", {
-            class: "btn",
-            onclick: async () => {
-              const ip = (refs.ipInput.value || "").trim();
-              const port = parseInt(refs.portInput.value, 10);
-              // IP 逐段校验：每段 0-255 且拒绝前导零
-              const segs = ip.split(".");
-              const ipOk = segs.length === 4 && segs.every((s) => {
-                if (!/^\d{1,3}$/.test(s)) return false;
-                if (s.length > 1 && s[0] === "0") return false;
-                const n = parseInt(s, 10);
-                return n >= 0 && n <= 255;
-              });
-              if (!ipOk) {
-                App.toast("请输入合法的 IPv4 地址", "error"); return;
-              }
-              if (!port || port < 1 || port > 65535) {
-                App.toast("端口需在 1-65535 之间", "error"); return;
-              }
-              const r = await App.tryCall("xfer_pick_files");
-              if (!r.ok || !r.data || !r.data.length) return;
-              const s = await App.tryCall("xfer_send", ip, port, r.data, ip);
-              if (!s.ok) { App.toast(s.err, "error", 5000); return; }
-              App.toast(`开始向 ${ip} 发送 ${s.data.files} 个文件（${App.fmtBytes(s.data.total)}）`, "ok", 5000);
-            },
-          }, "选择文件并发送"),
-          App.h("button", {
-            class: "btn",
-            onclick: async () => {
-              const ip = (refs.ipInput.value || "").trim();
-              const port = parseInt(refs.portInput.value, 10);
-              const segs = ip.split(".");
-              const ipOk = segs.length === 4 && segs.every((s) => {
-                if (!/^\d{1,3}$/.test(s)) return false;
-                if (s.length > 1 && s[0] === "0") return false;
-                const n = parseInt(s, 10);
-                return n >= 0 && n <= 255;
-              });
-              if (!ipOk) {
-                App.toast("请输入合法的 IPv4 地址", "error"); return;
-              }
-              if (!port || port < 1 || port > 65535) {
-                App.toast("端口需在 1-65535 之间", "error"); return;
-              }
-              const r = await App.tryCall("xfer_pick_files");
-              if (!r.ok || !r.data || !r.data.length) return;
-              const s = await App.tryCall("xfer_enqueue", ip, port, r.data, ip);
-              if (!s.ok) { App.toast(s.err, "error", 5000); return; }
-              App.toast(`已加入发送队列，将发送到 ${ip}`, "ok", 5000);
-            },
-          }, "选择文件并加入队列"),
+      /* v5.2 P4：页内标签「传输 | 历史与信任」；手动发送收进折叠区 */
+      const paneActive = App.h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+        refs.pairBox,       // 配对请求（事件弹出）
+        refs.offerBox,      // 待确认传输（事件弹出）
+        refs.queueBox,      // 发送队列（事件弹出）
+        App.h("div", { class: "card" },
+          App.h("div", { class: "card-title" }, "进行中的传输"),
+          refs.activeList,
         ),
-      ));
-
-      el.appendChild(refs.pairBox);
-      el.appendChild(refs.offerBox);
-      el.appendChild(refs.queueBox);
-
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "card-title" }, "已配对设备（传输自动加密）"),
-        refs.trustList,
-      ));
-
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "card-title" }, "进行中的传输"),
-        refs.activeList,
-      ));
-
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "card-title" }, "传输历史（最近 50 条）"),
-        refs.histList,
-      ));
-
-      el.appendChild(refs.log);
+        App.sec("手动发送（IP 直连，跨网段 / 多网卡场景）", [
+          App.h("p", { class: "hint", style: { margin: "0 0 8px" } },
+            "对方设备不在发现列表时可手动输入 IP 直连发送。"),
+          App.h("div", { class: "row" },
+            App.h("span", { class: "field-label" }, "目标 IP："),
+            (refs.ipInput = App.h("input", { class: "input mono", placeholder: "192.168.1.23", style: { width: "150px" } })),
+            App.h("span", { class: "field-label" }, "端口："),
+            (refs.portInput = App.h("input", { class: "input mono", value: "41893", style: { width: "90px" } })),
+          ),
+          App.h("div", { class: "row", style: { marginTop: "8px" } },
+            App.h("button", {
+              class: "btn",
+              onclick: async () => {
+                const ip = (refs.ipInput.value || "").trim();
+                const port = parseInt(refs.portInput.value, 10);
+                // IP 逐段校验：每段 0-255 且拒绝前导零
+                const segs = ip.split(".");
+                const ipOk = segs.length === 4 && segs.every((s) => {
+                  if (!/^\d{1,3}$/.test(s)) return false;
+                  if (s.length > 1 && s[0] === "0") return false;
+                  const n = parseInt(s, 10);
+                  return n >= 0 && n <= 255;
+                });
+                if (!ipOk) {
+                  App.toast("请输入合法的 IPv4 地址", "error"); return;
+                }
+                if (!port || port < 1 || port > 65535) {
+                  App.toast("端口需在 1-65535 之间", "error"); return;
+                }
+                const r = await App.tryCall("xfer_pick_files");
+                if (!r.ok || !r.data || !r.data.length) return;
+                const s = await App.tryCall("xfer_send", ip, port, r.data, ip);
+                if (!s.ok) { App.toast(s.err, "error", 5000); return; }
+                App.toast(`开始向 ${ip} 发送 ${s.data.files} 个文件（${App.fmtBytes(s.data.total)}）`, "ok", 5000);
+              },
+            }, "选择文件并发送"),
+            App.h("button", {
+              class: "btn",
+              onclick: async () => {
+                const ip = (refs.ipInput.value || "").trim();
+                const port = parseInt(refs.portInput.value, 10);
+                const segs = ip.split(".");
+                const ipOk = segs.length === 4 && segs.every((s) => {
+                  if (!/^\d{1,3}$/.test(s)) return false;
+                  if (s.length > 1 && s[0] === "0") return false;
+                  const n = parseInt(s, 10);
+                  return n >= 0 && n <= 255;
+                });
+                if (!ipOk) {
+                  App.toast("请输入合法的 IPv4 地址", "error"); return;
+                }
+                if (!port || port < 1 || port > 65535) {
+                  App.toast("端口需在 1-65535 之间", "error"); return;
+                }
+                const r = await App.tryCall("xfer_pick_files");
+                if (!r.ok || !r.data || !r.data.length) return;
+                const s = await App.tryCall("xfer_enqueue", ip, port, r.data, ip);
+                if (!s.ok) { App.toast(s.err, "error", 5000); return; }
+                App.toast(`已加入发送队列，将发送到 ${ip}`, "ok", 5000);
+              },
+            }, "选择文件并加入队列"),
+          ),
+        ], { open: false }),
+        refs.log,
+      );
+      const paneTrust = App.h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+        App.h("div", { class: "card" },
+          App.h("div", { class: "card-title" }, "已配对设备（传输自动加密）"),
+          refs.trustList,
+        ),
+        App.h("div", { class: "card" },
+          App.h("div", { class: "card-title" }, "传输历史（最近 50 条）"),
+          refs.histList,
+        ),
+      );
+      const tnav = App.subnav([
+        { label: "传输", el: paneActive },
+        { label: "历史与信任", el: paneTrust },
+      ]);
+      el.appendChild(tnav);
+      tnav.panes.forEach((p) => el.appendChild(p));
 
       await refresh();
     },

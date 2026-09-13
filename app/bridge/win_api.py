@@ -145,3 +145,34 @@ class WindowApi:
             return {"ok": True, "data": None}
         except Exception as e:
             return {"ok": False, "err": str(e)}
+
+    def win_resize_by(self, dw, dh):
+        """按增量调整窗口大小（v5.3，与 win_move_by 配对用于边缘缩放）。
+
+        背景：主窗口是 frameless（FormBorderStyle.None），WinForms 不提供缩放
+        边框，**用户此前无法拖边调整窗口大小**。这里不走 WM_NCLBUTTONDOWN
+        （那条路在 WebView2 上因鼠标捕获不在本进程而失效，见 win_begin_drag 注释），
+        而是复用 pywebview 自身 easy_drag 已验证可行的路径：前端逐次 mousemove
+        调桥接、后端用 pywebview 的 window.resize/move 落地。用增量而非绝对坐标，
+        绕开 DPI 与 pywebview 坐标系的换算差异。
+
+        注意：本方法按帧调用（拖动时每秒数十次），故 **不要**把 "win_" 加入
+        app/bridge/base.py 的 _JS_API_PREFIXES 自动日志白名单，否则刷屏。
+        """
+        try:
+            w = self._window
+            if w is None:
+                return {"ok": False, "err": "窗口尚未就绪"}
+            try:
+                dw = int(dw or 0)
+                dh = int(dh or 0)
+            except (TypeError, ValueError):
+                return {"ok": False, "err": "增量需为数字"}
+            if not dw and not dh:
+                return {"ok": True, "data": None}
+            nw = max(680, int(w.width or 0) + dw)
+            nh = max(460, int(w.height or 0) + dh)
+            w.resize(nw, nh)
+            return {"ok": True, "data": {"width": nw, "height": nh}}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}

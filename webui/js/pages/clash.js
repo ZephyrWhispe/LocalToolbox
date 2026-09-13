@@ -1,6 +1,6 @@
 /* Clash（mihomo 内核）页：与「V2rayN」（xray/sing-box）完全独立的一套。
  *
- * 单页面 + 页内页签（v2ray 式管理，App.subnav 互斥区块），归入「网盘与网络」分组
+ * 单页面 + 页内页签（v2ray 式管理，App.subnav 互斥区块），归入「代理网络」分组
  * （导航项排在 V2rayN 之后——注册顺序由 index.html 脚本加载顺序决定）：
  *   运行控制   —— 启停 / 模式 / 系统代理 / 实时速率 / 策略组 + 服务日志
  *   节点与订阅 —— 订阅导入 / 自动更新 / 节点列表（搜索 / 测速 / 删除）
@@ -11,7 +11,7 @@
 (function () {
   "use strict";
 
-  const GROUP = "网盘与网络";
+  const GROUP = "代理网络";
   const state = {
     st: null, nodes: [], groups: null, conns: null, connErr: "",
     busy: false, testing: new Set(), wired: false, filter: "",
@@ -87,7 +87,7 @@
     await refreshGroups();
   }
 
-  function wire() {
+  function wire(ctx) {
     if (state.wired) return;
     state.wired = true;
     App.on("clash_log", (m) => { if (log) log(String(m)); });
@@ -112,14 +112,20 @@
       appendKernelLog(m);
     });
     /* 连接面板轮询：仅当「连接与日志」页签可见且 Clash 运行时
-       （页未激活 / 页签隐藏时 offsetParent 为 null，一并跳过） */
-    setInterval(() => {
+       （页签隐藏时 offsetParent 为 null，一并跳过）。
+       v5.3：改用页面上下文定时器 —— 离开 Clash 页时整段跳过，不再永久空转
+       （改造前实测：无论是否在 Clash 页，每 2.5s 都在做一次刷新判定）；
+       回到页面时由 show() → refreshState() 全量补齐，不会少数据。 */
+    if (ctx) ctx.every(2500, () => {
       const st = state.st || {};
       if (!st.running || !refs.connBox || !refs.connBox.offsetParent) return;
       refreshConns();
-    }, 2500);
-    /* 实时速率：累计字节差分（每 2 秒刷新，仅运行控制页签可见时测量） */
-    setInterval(async () => {
+    });
+    /* 实时速率：累计字节差分（每 2 秒刷新，仅运行控制页签可见时测量）。
+       v5.3：这是"数据型"轮询——回调里会更新 state.speedPrev 做差分，不能整段
+       跳过（否则回到页面时要等两拍才有速率）。故用 everyAdaptive：离开页面时
+       降频到 10s 而非停止，既不空转也不丢失长时间跨度的速率样本。 */
+    if (ctx) ctx.everyAdaptive({ active: 2000, idle: 10000 }, async () => {
       const st = state.st || {};
       if (!refs.speedTag || !refs.speedTag.offsetParent) return;
       if (!st.running) {
@@ -140,7 +146,7 @@
         state.upSpeed = Math.max(0, (cur.u - prev.u) / dt);
       }
       renderSpeed();
-    }, 2000);
+    });
   }
 
   function renderSpeed() {
@@ -614,8 +620,8 @@
     icon: "shield",
     group: GROUP,
 
-    async mount(el) {
-      wire();
+    async mount(el, ctx) {
+      wire(ctx);
       refs = {};
 
       /* 页签 1：运行控制（主任务：启停 / 模式 / 系统代理 / 策略组） */
@@ -649,10 +655,10 @@
       refs.nodeCount = App.h("b", null, "0");
       refs.nodeShown = App.h("span", { class: "hint" }, "");
       refs.nodeBox = App.h("div", { class: "list", style: { minHeight: "160px", maxHeight: "360px", overflowY: "auto" } });
-      const nodeSearch = App.h("input", { class: "input", type: "search",
-        placeholder: "搜索节点（备注 / 地址 / 协议）", style: { flex: "1", minWidth: "160px" } });
+      const nodeSearch = App.h("input", { class: "input grow-in", type: "search",
+        placeholder: "搜索节点（备注 / 地址 / 协议）" });
       nodeSearch.addEventListener("input", () => { state.filter = nodeSearch.value; renderNodes(); });
-      refs.subUrl = App.h("input", { class: "input", placeholder: "订阅地址（http/https）", style: { flex: "1", minWidth: "220px" } });
+      refs.subUrl = App.h("input", { class: "input grow-in", placeholder: "订阅地址（http/https）" });
       refs.subAuto = App.h("select", { class: "input", onchange: setSubAuto, style: { width: "130px" } },
         App.h("option", { value: "0" }, "自动更新关闭"),
         App.h("option", { value: "6" }, "每 6 小时"),

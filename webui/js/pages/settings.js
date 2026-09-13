@@ -32,6 +32,121 @@
     );
   }
 
+  /* ---------------- 自定义上传目标管理（v5.4 O2，ShareX Custom Uploader 子集） ---------------- */
+  function parseKVText(text, sep) {
+    /* 每行一条 Key<sep>Value；解析失败行忽略，空行跳过 */
+    const out = {};
+    String(text || "").split("\n").forEach((line) => {
+      const s = line.trim();
+      if (!s) return;
+      const i = s.indexOf(sep);
+      if (i <= 0) return;
+      out[s.slice(0, i).trim()] = s.slice(i + sep.length).trim();
+    });
+    return out;
+  }
+
+  function showUploadTargetsModal(onChanged) {
+    const listBox = App.h("div", { class: "list", style: { maxHeight: "180px", overflowY: "auto" } });
+    function renderList() {
+      listBox.innerHTML = "";
+      const targets = ((App.state.cfg || {}).upload_targets) || [];
+      if (!targets.length) {
+        listBox.appendChild(App.h("div", { class: "empty" },
+          "还没有上传目标\n点击下方表单新增，截图上传时即可选择"));
+        return;
+      }
+      targets.forEach((t, i) => {
+        listBox.appendChild(App.h("div", { class: "list-item" },
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title" }, t.name),
+            App.h("div", { class: "li-sub mono" }, t.method + " " + t.url)),
+          App.h("button", {
+            class: "btn xs danger", onclick: async function () {
+              if (this._busy) return;
+              if (!(await App.confirm("删除上传目标",
+                "将删除目标「" + t.name + "」（不影响已上传的历史链接）。确定？"))) return;
+              this._busy = true; this.disabled = true; this.textContent = "删除中…";
+              try {
+                const r = await App.tryCall("upload_targets_del", i);
+                if (!r.ok) { App.toast(r.err, "error"); return; }
+                App.state.cfg.upload_targets = r.data.targets || [];
+                App.toast("已删除「" + r.data.removed + "」", "ok");
+                renderList();
+                if (onChanged) onChanged();
+              } finally { this._busy = false; this.disabled = false; this.textContent = "删除"; }
+            },
+          }, "删除"),
+        ));
+      });
+    }
+    renderList();
+
+    /* 新增表单（枚举一律下拉，禁止手输） */
+    const inName = App.h("input", { class: "input", placeholder: "如：公司图床" });
+    const inUrl = App.h("input", { class: "input", placeholder: "https://example.com/api/upload" });
+    const selMethod = App.h("select", { class: "input" },
+      App.h("option", { value: "POST" }, "POST"),
+      App.h("option", { value: "PUT" }, "PUT"),
+      App.h("option", { value: "GET" }, "GET"),
+    );
+    const selBody = App.h("select", { class: "input" },
+      App.h("option", { value: "multipart" }, "multipart（表单上传，最常见）"),
+      App.h("option", { value: "json" }, "json（{file} 替换为 base64）"),
+      App.h("option", { value: "raw" }, "raw（原始图片字节）"),
+    );
+    const inField = App.h("input", { class: "input", value: "file", placeholder: "file" });
+    const inHeaders = App.h("textarea", {
+      class: "input", rows: "2",
+      placeholder: "每行一条，Key: Value\n如 Authorization: Bearer xxx",
+    });
+    const inArgs = App.h("textarea", {
+      class: "input", rows: "2",
+      placeholder: "每行一条，key=value（multipart/json 生效）\n可用变量 {file}（文件路径或base64）、{filename}",
+    });
+    const inPath = App.h("input", { class: "input", placeholder: "如 data.url（留空则自动尝试常见路径）" });
+    const inRegex = App.h("input", { class: "input", placeholder: "如 \"url\":\"(.+?)\"（可选）" });
+
+    const addBtn = App.h("button", {
+      class: "btn primary", onclick: async function () {
+        if (this._busy) return;
+        this._busy = true; this.disabled = true; this.textContent = "保存中…";
+        try {
+          const r = await App.tryCall("upload_targets_add", {
+            name: inName.value, url: inUrl.value, method: selMethod.value,
+            body: selBody.value, headers: parseKVText(inHeaders.value, ":"),
+            file_field: inField.value, arguments: parseKVText(inArgs.value, "="),
+            url_path: inPath.value, url_regex: inRegex.value,
+          });
+          if (!r.ok) { App.toast(r.err, "error"); return; }
+          App.state.cfg.upload_targets = r.data || [];
+          App.toast("已添加上传目标", "ok");
+          inName.value = ""; inUrl.value = ""; inHeaders.value = ""; inArgs.value = "";
+          inPath.value = ""; inRegex.value = "";
+          renderList();
+          if (onChanged) onChanged();
+        } finally { this._busy = false; this.disabled = false; this.textContent = "添加目标"; }
+      },
+    }, "添加目标");
+
+    App.modal({
+      title: "自定义上传目标",
+      okText: "关闭",
+      body: App.h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+        App.h("div", { class: "card-title", style: { fontSize: "13px", margin: "0" } }, "已有目标"),
+        listBox,
+        App.h("div", { class: "card-title", style: { fontSize: "13px", margin: "4px 0 0" } }, "新增目标"),
+        App.h("div", { class: "row", style: { margin: "0", flexWrap: "nowrap" } }, inName, inUrl),
+        App.h("div", { class: "row", style: { margin: "0", flexWrap: "nowrap" } }, selMethod, selBody, inField),
+        inHeaders, inArgs,
+        App.h("div", { class: "row", style: { margin: "0", flexWrap: "nowrap" } }, inPath, inRegex),
+        App.h("div", { class: "row", style: { margin: "0", justifyContent: "flex-end" } }, addBtn),
+        App.h("div", { class: "hint" },
+          "响应链接提取：优先按「URL 提取路径」从 JSON 取值，其次常见路径兜底，再次正则第一个捕获组，最后取纯文本。"),
+      ),
+    });
+  }
+
   /* ---------------- 快捷键录制控件 ---------------- */
   let armedEditor = null;   // 同一时刻只允许一个编辑器在录制
 
@@ -82,6 +197,9 @@
 
     window.addEventListener("keydown", async (e) => {
       if (!ed.armed) return;
+      /* v5.3：若已离开设置页（捕获态未解除），立即解除并放行按键 —— 此前该监听
+         会持续 preventDefault，用户切页后整个键盘被静默吞掉（按什么都没反应） */
+      if (!App.isPageActive("settings")) { ed.disarm(); return; }
       e.preventDefault();
       if (e.key === "Escape") { ed.disarm(); return; }
       if (["Control", "Alt", "Shift", "Meta", "Win", "OS", "CapsLock"].includes(e.key)) return;
@@ -101,7 +219,8 @@
         ed.combo = r.data.combo;
         if (App.state.cfg) {
           const map = { clip: "hotkey_clip", shot: "hotkey_shot",
-                        full: "hotkey_full", pop: "hotkey_pop" };
+                        full: "hotkey_full", pop: "hotkey_pop",
+                        memo: "hotkey_memo", ocr: "hotkey_ocr" };
           App.state.cfg[map[slot] || "hotkey_clip"] = ed.combo;
         }
         if (r.data.stolen) {
@@ -298,10 +417,39 @@
         ...(App.state.cfg && App.state.cfg.clip_encrypt ? { checked: true } : {}),
       });
       encTgl.addEventListener("change", async () => {
-        const r = await App.tryCall("cfg_set", "clip_encrypt", encTgl.checked);
-        if (r.ok) {
-          App.toast(encTgl.checked ? "已开启历史加密（新条目加密落盘）" : "已关闭历史加密", "ok");
-        } else App.toast(r.err, "error");
+        if (encTgl._busy) return;
+        encTgl._busy = true;
+        try {
+          const r = await App.tryCall("cfg_set", "clip_encrypt", encTgl.checked);
+          if (r.ok) {
+            const n = Number(r.migrated) || 0;
+            App.toast(encTgl.checked
+              ? "已开启历史加密（AES-256-GCM）" + (n ? "，存量 " + n + " 条已加密" : "")
+              : "已关闭历史加密" + (n ? "，" + n + " 条已解密回明文" : ""), "ok");
+          } else {
+            App.toast(r.err, "error");
+            encTgl.checked = !encTgl.checked;  // 开关回弹：迁移失败配置未变更
+          }
+        } finally { encTgl._busy = false; }
+      });
+      /* v5.4 二期：本地 IPC 接口开关（cfg_set 即时启停监听） */
+      const ipcTgl = App.h("input", {
+        type: "checkbox",
+        ...((App.state.cfg || {}).ipc_enabled ? { checked: true } : {}),
+      });
+      ipcTgl.addEventListener("change", async () => {
+        if (ipcTgl._busy) return;
+        ipcTgl._busy = true;
+        try {
+          const r = await App.tryCall("cfg_set", "ipc_enabled", ipcTgl.checked);
+          if (r.ok) {
+            App.toast(ipcTgl.checked
+              ? "IPC 接口已开启（127.0.0.1:17258，只读）" : "IPC 接口已关闭", "ok");
+          } else {
+            App.toast(r.err, "error", 6000);
+            ipcTgl.checked = !ipcTgl.checked;
+          }
+        } finally { ipcTgl._busy = false; }
       });
       put(paneGeneral, App.h("div", { class: "card" },
         App.h("div", { class: "card-title" }, "隐私"),
@@ -309,6 +457,15 @@
           App.h("label", { class: "switch" }, encTgl, App.h("span", { class: "track" }),
             "历史落盘加密（文本 AES-256-GCM，密钥由系统 DPAPI 保护）"),
         ),
+        /* v5.4 二期：本地 IPC 只读接口（默认关，仅回环） */
+        App.h("div", { class: "sep" }),
+        App.row(
+          App.h("label", { class: "switch" }, ipcTgl, App.h("span", { class: "track" }),
+            "本地 IPC 接口（默认关）"),
+        ),
+        App.h("div", { class: "hint", style: { marginTop: "4px" } },
+          "开启后本机其它程序可经 http://127.0.0.1:17258/api/v1/ 读取已装应用清单" +
+          "（只读、仅回环、不暴露局域网）。供自动化脚本对接用，普通使用无需开启。"),
       ));
 
       /* 文件传输偏好（v3.5d：+ 完成提示音） */
@@ -398,16 +555,30 @@
         }
       });
 
-      const uploadSel = App.h("select", { class: "input" },
-        App.h("option", { value: "imgur" }, "Imgur（免费公共）"),
-        App.h("option", { value: "custom" }, "自定义接口"),
-      );
-      uploadSel.value = (App.state.cfg || {}).upload_service || "imgur";
+      /* v5.4 O2：默认图床下拉含自定义上传目标（target:<index>） */
+      const uploadSel = App.h("select", { class: "input" });
+      function fillUploadSel() {
+        uploadSel.innerHTML = "";
+        uploadSel.appendChild(App.h("option", { value: "imgur" }, "Imgur（免费公共）"));
+        uploadSel.appendChild(App.h("option", { value: "custom" }, "自定义接口（简单）"));
+        (((App.state.cfg || {}).upload_targets) || []).forEach((t, i) => {
+          uploadSel.appendChild(App.h("option", { value: "target:" + i },
+            "目标「" + t.name + "」"));
+        });
+        const cur = (App.state.cfg || {}).upload_service || "imgur";
+        uploadSel.value = cur;
+        if (uploadSel.selectedIndex < 0) uploadSel.value = "imgur";
+      }
+      fillUploadSel();
       uploadSel.addEventListener("change", async () => {
         if (await save("upload_service", uploadSel.value)) {
-          App.toast("默认图床已设为 " + uploadSel.value, "ok");
+          App.toast("默认图床已保存", "ok");
         }
       });
+      const uploadTargetsBtn = App.h("button", {
+        class: "btn sm",
+        onclick: () => showUploadTargetsModal(() => { fillUploadSel(); }),
+      }, "管理上传目标…");
 
       put(paneGeneral, App.h("div", { class: "card" },
         App.h("div", { class: "card-title" }, "截图与编辑器"),
@@ -429,8 +600,79 @@
         App.row(
           App.h("span", { class: "field-label" }, "默认图床："), uploadSel,
         ),
+        App.row(
+          App.h("span", { class: "field-label" }, "自定义上传目标："), uploadTargetsBtn,
+        ),
         App.h("div", { class: "hint", style: { marginTop: "8px" } },
           "贴图（Pin to Screen）可将截图钉在桌面最上层；图床上传用于快速分享截图链接。"),
+      ));
+
+      /* OCR（v5.1：三引擎 + 截图识字 + 后处理） */
+      const ocrEngineSel = App.h("select", { class: "input", style: { width: "auto" } },
+        App.h("option", { value: "winrt" }, "Windows 内置（默认，零依赖）"),
+        App.h("option", { value: "rapid" }, "RapidOCR 本地内核（需 pip 安装）"),
+        App.h("option", { value: "umi" }, "Umi-OCR 内核（HTTP，可下载）"),
+      );
+      ocrEngineSel.value = ["winrt", "rapid", "umi"].includes(
+        (App.state.cfg || {}).ocr_engine) ? App.state.cfg.ocr_engine : "winrt";
+      ocrEngineSel.addEventListener("change", () => save("ocr_engine", ocrEngineSel.value));
+      const ocrUrlInput = App.h("input", {
+        class: "input grow-in",
+        placeholder: "http://127.0.0.1:1224",
+        value: (App.state.cfg || {}).ocr_umi_url || "http://127.0.0.1:1224",
+        onchange: (e) => save("ocr_umi_url", e.target.value.trim()),
+      });
+      const ocrMergeTgl = App.h("input", {
+        type: "checkbox",
+        ...((App.state.cfg || {}).ocr_merge_lines !== false ? { checked: true } : {}),
+        onchange: (e) => save("ocr_merge_lines", e.target.checked),
+      });
+      const ocrAutoTgl = App.h("input", {
+        type: "checkbox",
+        ...((App.state.cfg || {}).ocr_umi_autostart !== false ? { checked: true } : {}),
+        onchange: (e) => save("ocr_umi_autostart", e.target.checked),
+      });
+      const ocrTestBtn = App.h("button", {
+        class: "btn sm", onclick: async () => {
+          const r = await App.tryCall("tool_ocr_engines");
+          if (!r.ok) { App.toast(r.err, "error"); return; }
+          const d = r.data;
+          if (d.engine === "umi") {
+            App.toast(d.umi_ready ? "Umi-OCR 服务连接正常" : "Umi-OCR 服务未运行（识别时会自动拉起）",
+                      d.umi_ready ? "ok" : "warn", 6000);
+          } else if (d.engine === "rapid") {
+            App.toast(d.rapid ? "RapidOCR 可用" : "RapidOCR 未安装", d.rapid ? "ok" : "warn", 6000);
+          } else {
+            App.toast(d.winrt ? "Windows 内置引擎可用" : "内置引擎不可用（缺语言包）",
+                      d.winrt ? "ok" : "warn", 6000);
+          }
+        },
+      }, "测试引擎");
+      const ocrDlBtn = App.h("button", {
+        class: "btn sm", onclick: async () => {
+          App.toast("开始下载 Umi-OCR 内核（约 103MB）…", "ok", 6000);
+          await App.tryCall("ocr_umi_download");
+        },
+      }, "下载 Umi 内核");
+      put(paneGeneral, App.h("div", { class: "card" },
+        App.h("div", { class: "card-title" }, "OCR 识别"),
+        App.row(
+          App.h("span", { class: "field-label" }, "识别引擎："), ocrEngineSel, ocrTestBtn,
+        ),
+        App.row(
+          App.h("span", { class: "field-label" }, "Umi 服务地址："), ocrUrlInput,
+          ocrDlBtn,
+        ),
+        App.row(
+          App.h("label", { class: "switch" }, ocrMergeTgl, App.h("span", { class: "track" }),
+            "文本后处理：中文相邻行智能合并"),
+          App.h("label", { class: "switch" }, ocrAutoTgl, App.h("span", { class: "track" }),
+            "Umi 服务未运行时自动拉起内核"),
+        ),
+        App.h("div", { class: "hint", style: { marginTop: "8px" } },
+          "内置 Windows 引擎零依赖；RapidOCR 需源码运行并 pip install rapidocr_onnxruntime；",
+          App.h("br"),
+          "Umi-OCR 内核由 OCR 页「下载内核」按钮按需下载（约 103MB，本机离线识别），不选择 umi 引擎时完全不依赖。"),
       ));
 
       /* 全局快捷键：总开关 + 自定义组合键（剪贴板呼出 / 区域截图） */
@@ -453,6 +695,10 @@
         App.state.cfg && App.state.cfg.hotkey_full ? App.state.cfg.hotkey_full : "Ctrl+Alt+F");
       const popEditor = hotkeyEditor("pop",
         App.state.cfg && App.state.cfg.hotkey_pop ? App.state.cfg.hotkey_pop : "Win+V");
+      const memoEditor = hotkeyEditor("memo",
+        App.state.cfg && App.state.cfg.hotkey_memo ? App.state.cfg.hotkey_memo : "Ctrl+Alt+M");
+      const ocrEditor = hotkeyEditor("ocr",
+        App.state.cfg && App.state.cfg.hotkey_ocr ? App.state.cfg.hotkey_ocr : "Ctrl+Alt+O");
 
       put(paneHotkey, App.h("div", { class: "card" },
         App.h("div", { class: "card-title" }, "全局快捷键"),
@@ -464,6 +710,14 @@
         App.row(
           App.h("span", { class: "field-label", style: { width: "150px" } }, "剪贴板弹窗："),
           popEditor.btn,
+        ),
+        App.row(
+          App.h("span", { class: "field-label", style: { width: "150px" } }, "备忘录弹窗："),
+          memoEditor.btn,
+        ),
+        App.row(
+          App.h("span", { class: "field-label", style: { width: "150px" } }, "截图识字："),
+          ocrEditor.btn,
         ),
         App.row(
           App.h("span", { class: "field-label", style: { width: "150px" } }, "剪贴板历史呼出："),
@@ -746,6 +1000,280 @@
         upResult,
       ));
 
+      /* 备份与恢复（v5.0：备忘录/密码库 WebDAV 多目标并行） */
+      const bkTargetsBox = App.h("div", { style: { marginTop: "6px" } });
+      const bkTargets = () => ((App.state.cfg || {}).backup_targets || []);
+      const bkSaveTargets = async (list) => {
+        const r = await App.tryCall("cfg_set", "backup_targets", list);
+        if (!r.ok) { App.toast(r.err, "error"); return null; }
+        return r.data;
+      };
+      const bkRenderTargets = () => {
+        bkTargetsBox.innerHTML = "";
+        const list = bkTargets();
+        if (!list.length) {
+          bkTargetsBox.appendChild(App.h("div", { class: "hint" }, "尚未配置备份目标"));
+        }
+        list.forEach((t, i) => {
+          const tgl = App.h("input", {
+            type: "checkbox", ...(t.enabled ? { checked: true } : {}),
+            onchange: async (e) => {
+              const next = bkTargets().map((x, j) => j === i ? { ...x, enabled: e.target.checked } : x);
+              const r = await bkSaveTargets(next);
+              if (r) bkRenderTargets();
+            },
+          });
+          bkTargetsBox.appendChild(App.h("div", { class: "row", style: { alignItems: "center" } },
+            App.h("label", { class: "switch", style: { flex: "none" } },
+              tgl, App.h("span", { class: "track" })),
+            App.h("span", { style: { width: "90px", flex: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, t.name || t.type),
+            App.h("span", { class: "hint", style: { flex: "1", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              t.type === "openlist" ? `复用网盘账号（${(App.state.cfg || {}).openlist_host || "127.0.0.1"}:${(App.state.cfg || {}).openlist_port || 15244}/dav）` : (t.url || "未填地址")),
+            App.h("button", {
+              class: "btn sm", onclick: async () => {
+                App.toast("正在测试连接…", "ok");
+                const r = await App.tryCall("backup_test", i);
+                if (!r.ok) App.toast(r.err, "error", 6000);
+                else App.toast(`「${r.data.name}」连接成功`, "ok");
+              },
+            }, "测试"),
+            App.h("button", {
+              class: "btn sm", onclick: async () => {
+                const ok = await App.confirm(`删除备份目标「${t.name}」？`);
+                if (!ok) return;
+                const r = await bkSaveTargets(bkTargets().filter((_, j) => j !== i));
+                if (r) bkRenderTargets();
+              },
+            }, "×"),
+          ));
+        });
+        bkTargetsBox.appendChild(App.h("div", { class: "row", style: { marginTop: "4px" } },
+          App.h("button", {
+            class: "btn sm", onclick: async () => {
+              const r = await bkSaveTargets([...bkTargets(), {
+                type: "openlist", name: "网盘", url: "", user: "", pwd: "",
+                dir: "LocalToolboxBackup", enabled: true }]);
+              if (r) bkRenderTargets();
+            },
+          }, "+ 复用网盘账号"),
+          App.h("button", {
+            class: "btn sm", onclick: async () => {
+              const vals = await App.modal({
+                title: "添加 WebDAV 目标",
+                inputs: [
+                  { label: "名称", placeholder: "例如：坚果云" },
+                  { label: "WebDAV 地址", placeholder: "https://dav.jianguoyun.com/dav/" },
+                  { label: "账号", placeholder: "账号" },
+                  { label: "密码 / 应用密码", type: "password" },
+                  { label: "备份目录", placeholder: "LocalToolboxBackup" },
+                ],
+                okText: "添加",
+              });
+              if (!vals || !vals[1]) return;
+              const r = await bkSaveTargets([...bkTargets(), {
+                type: "webdav", name: vals[0] || "WebDAV", url: vals[1].trim(),
+                user: vals[2] || "", pwd: vals[3] || "",
+                dir: vals[4] || "LocalToolboxBackup", enabled: true }]);
+              if (r) bkRenderTargets();
+            },
+          }, "+ 自定义 WebDAV"),
+        ));
+      };
+
+      const bkKeepInput = App.h("input", {
+        class: "input", type: "number", min: "1", max: "50", style: { width: "70px" },
+        value: (App.state.cfg || {}).backup_keep != null ? App.state.cfg.backup_keep : 10,
+        onchange: (e) => save("backup_keep", parseInt(e.target.value, 10) || 10),
+      });
+      const bkAutoTgl = App.h("input", {
+        type: "checkbox",
+        ...((App.state.cfg || {}).backup_autoupload ? { checked: true } : {}),
+        onchange: (e) => save("backup_autoupload", e.target.checked),
+      });
+      const bkHoursInput = App.h("input", {
+        class: "input", type: "number", min: "6", max: "720", style: { width: "80px" },
+        value: (App.state.cfg || {}).backup_autoupload_hours != null
+          ? App.state.cfg.backup_autoupload_hours : 24,
+        onchange: (e) => save("backup_autoupload_hours", parseInt(e.target.value, 10) || 24),
+      });
+      const bkStatus = App.h("div", { class: "hint", style: { marginTop: "6px" } });
+      const bkRestoreKind = App.h("select", { class: "input", style: { width: "auto" } },
+        App.h("option", { value: "memo" }, "备忘录"),
+        App.h("option", { value: "vault" }, "密码库"));
+      const bkRestoreTarget = App.h("select", { class: "input", style: { width: "auto" } });
+      const bkRestoreFile = App.h("select", { class: "input", style: { width: "auto", maxWidth: "260px" } });
+      const bkRestoreMode = App.h("select", { class: "input", style: { width: "auto" } },
+        App.h("option", { value: "merge" }, "合并（仅备忘录）"),
+        App.h("option", { value: "replace" }, "替换现有内容"));
+      const bkRefreshTargets = () => {
+        bkRestoreTarget.innerHTML = "";
+        bkTargets().forEach((t, i) => {
+          bkRestoreTarget.appendChild(App.h("option", { value: String(i) },
+            `${t.name || t.type}（${t.type === "openlist" ? "网盘账号" : "WebDAV"}）`));
+        });
+      };
+      const bkListFiles = async () => {
+        bkRestoreFile.innerHTML = "";
+        const kind = bkRestoreKind.value;
+        const r = await App.tryCall("backup_list", kind, parseInt(bkRestoreTarget.value || "0", 10));
+        if (!r.ok) {
+          bkRestoreFile.appendChild(App.h("option", { value: "" }, r.err || "获取失败"));
+          return;
+        }
+        const files = r.data.files || [];
+        if (!files.length) {
+          bkRestoreFile.appendChild(App.h("option", { value: "" }, "（该目标暂无备份）"));
+          return;
+        }
+        for (const f of files) bkRestoreFile.appendChild(App.h("option", { value: f.name }, f.name));
+      };
+      bkRestoreKind.addEventListener("change", bkListFiles);
+      bkRestoreTarget.addEventListener("change", bkListFiles);
+      bkRefreshTargets();
+
+      put(paneHotkey, App.h("div", { class: "card" },
+        App.h("div", { class: "card-title" }, "备份与恢复（备忘录 / 密码库）"),
+        bkTargetsBox,
+        App.h("div", { class: "sep" }),
+        /* v5.3：此前 5 个元素挤一行（保留份数+开关+间隔+单位），拆成语义两行 */
+        App.row(
+          App.h("span", { class: "field-label" }, "每目标保留份数："), bkKeepInput,
+        ),
+        App.row(
+          App.h("label", { class: "switch" }, bkAutoTgl, App.h("span", { class: "track" }), "自动定期备份"),
+          App.h("span", { class: "field-label" }, "间隔："), bkHoursInput,
+          App.h("span", { class: "hint" }, "小时"),
+        ),
+        App.h("div", { class: "row", style: { marginTop: "4px" } },
+          App.h("button", {
+            class: "btn primary", onclick: async function () {
+              /* v5.1c：备份是慢操作，禁用按钮 + 状态联动（backup_progress 事件） */
+              if (this._busy) return;
+              this._busy = true; this.disabled = true;
+              const old = this.textContent; this.textContent = "备份中…";
+              bkStatus.textContent = "正在备份到全部启用目标…";
+              try {
+                const r = await App.tryCall("backup_run", "all");
+                if (!r.ok) { bkStatus.textContent = r.err; App.toast(r.err, "error"); }
+              } finally {
+                this._busy = false; this.disabled = false; this.textContent = old;
+              }
+            },
+          }, "立即备份"),
+          App.h("span", { class: "hint" },
+            "备忘录导出为明文 JSON；密码库上传加密文件原样（跨机输主口令即可恢复）"),
+        ),
+        bkStatus,
+        App.h("div", { class: "sep" }),
+        App.h("div", { class: "card-title", style: { fontSize: "13px" } }, "从备份恢复"),
+        App.row(
+          bkRestoreKind, bkRestoreTarget,
+          App.h("button", { class: "btn sm", onclick: bkListFiles }, "刷新列表"),
+        ),
+        App.row(
+          bkRestoreFile, bkRestoreMode,
+          App.h("button", {
+            class: "btn", onclick: async function () {
+              /* v5.1c：恢复含 WebDAV 下载（可达数秒），防连点重复恢复 */
+              if (this._busy) return;
+              const name = bkRestoreFile.value;
+              if (!name) { App.toast("请先刷新并选择备份文件", "warn"); return; }
+              const kind = bkRestoreKind.value;
+              const mode = bkRestoreMode.value;
+              if (mode === "replace") {
+                const what = kind === "memo" ? "备忘录现有全部内容"
+                  : "密码库现有全部条目（恢复后需用备份时的主口令重新解锁）";
+                const ok = await App.confirm("替换导入确认",
+                  `将清空${what}并从备份重建，确定继续？`);
+                if (!ok) return;
+              }
+              this._busy = true; this.disabled = true;
+              const old = this.textContent; this.textContent = "恢复中…";
+              try {
+                const r = await App.tryCall("backup_restore", kind,
+                  parseInt(bkRestoreTarget.value || "0", 10), name, mode);
+                if (!r.ok) { App.toast(r.err, "error", 6000); return; }
+                App.toast(kind === "memo" ? `已恢复 ${r.data.count} 条备忘` : "密码库已恢复，请用备份时的主口令解锁", "ok", 6000);
+              } finally {
+                this._busy = false; this.disabled = false; this.textContent = old;
+              }
+            },
+          }, "恢复"),
+        ),
+      ));
+
+      App.on("backup_progress", (d) => {
+        const fails = (d.results || []).filter((x) => !x.ok);
+        bkStatus.textContent = `「${d.target}」：` + (fails.length
+          ? fails.map((f) => `${f.kind} 失败（${f.err}）`).join("，")
+          : (d.results || []).map((f) => `${f.kind} ✓ ${f.file}`).join("，"));
+      });
+      App.on("backup_done", (d) => {
+        bkStatus.textContent = `备份完成：成功 ${d.ok_count} 项，失败 ${d.fail_count} 项`;
+        if (d.ok) App.toast("云备份完成", "ok");
+        else App.toast(`云备份有 ${d.fail_count} 项失败，详见状态栏`, "warn", 6000);
+      });
+
+      /* v5.4 O7：整机配置导出/导入 */
+      const showCfgImportModal = () => {
+        const stratSel = App.h("select", { class: "input" },
+          App.h("option", { value: "skip_existing" }, "存量优先（保留本机已改过的设置）"),
+          App.h("option", { value: "overwrite" }, "导入优先（导入文件覆盖本机）"),
+        );
+        App.modal({
+          title: "导入整机配置",
+          okText: "选择文件并导入",
+          body: App.h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+            App.row(App.h("span", { class: "field-label" }, "合并策略："), stratSel),
+            App.h("div", { class: "hint" },
+              "导入前请确认文件由本应用「导出配置」生成（含校验和，损坏文件会被拒绝）。"),
+            App.h("div", { class: "hint" },
+              "部分设置（端口、自启动等）将在重启应用后完全生效。"),
+          ),
+        }).then(async (v) => {
+          if (!v) return;
+          const pick = await App.tryCall("cfg_import_pick");
+          if (!pick.ok) {
+            if (String(pick.err || "").indexOf("未选择") < 0) App.toast(pick.err, "error");
+            return;
+          }
+          const ok = await App.confirm("导入配置确认",
+            "将按所选策略合并导入配置（导入过程自动备份当前配置），确定继续？");
+          if (!ok) return;
+          const r = await App.tryCall("cfg_import", pick.data.path, stratSel.value);
+          if (!r.ok) { App.toast(r.err, "error", 6000); return; }
+          const d = r.data;
+          let msg = `导入完成：合并 ${d.merged} 项，保留 ${d.skipped} 项`;
+          if (d.failed.length) msg += `，失败 ${d.failed.length} 项（${d.failed[0]}…）`;
+          App.toast(msg + "。部分设置重启后生效", d.failed.length ? "warn" : "ok", 8000);
+        });
+      };
+      put(paneHotkey, App.h("div", { class: "card" },
+        App.h("div", { class: "card-title" }, "整机配置迁移"),
+        App.h("div", { class: "row", style: { marginTop: "4px", flexWrap: "wrap" } },
+          App.h("button", {
+            class: "btn", onclick: async function () {
+              if (this._busy) return;
+              this._busy = true; this.disabled = true;
+              const old = this.textContent; this.textContent = "导出中…";
+              try {
+                const pick = await App.tryCall("cfg_export_pick");
+                if (!pick.ok) {
+                  if (String(pick.err || "").indexOf("未选择") < 0) App.toast(pick.err, "error");
+                  return;
+                }
+                const r = await App.tryCall("cfg_export", pick.data.path, true);
+                if (!r.ok) { App.toast(r.err, "error"); return; }
+                App.toast(`已导出 ${r.data.count} 项配置（敏感项已剔除）：${r.data.path}`, "ok", 8000);
+              } finally { this._busy = false; this.disabled = false; this.textContent = old; }
+            },
+          }, "导出配置…"),
+          App.h("button", { class: "btn", onclick: showCfgImportModal }, "导入配置…"),
+        ),
+        App.h("div", { class: "hint", style: { marginTop: "8px" } },
+          "导出文件含版本号与 SHA-256 校验和；WebDAV 密码等敏感项默认剔除。导入逐键合并，可保留本机设置或以导入文件为准。"),
+      ));
+
       /* 日志 */
       const levelSel = App.h("select", { class: "input" },
         App.h("option", { value: "DEBUG" }, "DEBUG"),
@@ -800,10 +1328,9 @@
 
       /* 本机信息（v3.5e：+ 自定义设备名） */
       const nameInput = App.h("input", {
-        class: "input", type: "text", maxLength: "32",
+        class: "input grow-in", type: "text", maxLength: "32",
         placeholder: "留空使用主机名",
         value: String((App.state.cfg || {}).device_name_custom || ""),
-        style: { width: "220px" },
       });
       const nameSave = App.h("button", { class: "btn sm" }, "保存");
       nameSave.onclick = async () => {

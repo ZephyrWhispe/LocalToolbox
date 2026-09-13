@@ -38,6 +38,27 @@ def is_admin():
         return False
 
 
+def _relaunch_target(extra_args=()):
+    """计算提权重启的 (lpFile, lpParameters)。
+
+    源码运行场景优先选 pythonw.exe（GUI 解释器，无控制台窗口）——此前直接用
+    python.exe，ShellExecuteExW 拉起后必带一个命令行窗口闪现；
+    打包（frozen）场景 exe 本身无控制台，维持原路径。
+    """
+    args = list(extra_args or [])
+    if getattr(sys, "frozen", False):
+        file = os.path.abspath(sys.executable)
+        params = subprocess.list2cmdline(args)
+        return file, params
+    file = os.path.abspath(sys.executable)
+    script = os.path.abspath(sys.argv[0] or "main.py")
+    pyw = os.path.join(os.path.dirname(file), "pythonw.exe")
+    if os.path.isfile(pyw):
+        file = pyw
+    params = '"%s" %s' % (script, subprocess.list2cmdline(args))
+    return file, params
+
+
 def relaunch_elevated(extra_args=()):
     """以管理员身份重新启动本应用（ShellExecuteExW runas）。
 
@@ -49,14 +70,7 @@ def relaunch_elevated(extra_args=()):
     if sys.platform != "win32":
         return False, "仅支持 Windows 提权重启"
     try:
-        args = list(extra_args or [])
-        if getattr(sys, "frozen", False):
-            file = os.path.abspath(sys.executable)
-            params = subprocess.list2cmdline(args)
-        else:
-            file = os.path.abspath(sys.executable)
-            script = os.path.abspath(sys.argv[0] or "main.py")
-            params = '"%s" %s' % (script, subprocess.list2cmdline(args))
+        file, params = _relaunch_target(extra_args)
 
         shell32 = ctypes.windll.shell32
         shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(_SHELLEXECUTEINFOW)]

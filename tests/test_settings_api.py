@@ -399,5 +399,112 @@ class TestKmCfg(unittest.TestCase):
         self.assertEqual(self.stub._km_target.lock_calls, [True])
 
 
+class TestV50Cfg(unittest.TestCase):
+    """v5.0：备忘录 / 密码库 / 备份 / 文件收藏 cfg 键。"""
+
+    def setUp(self):
+        from app.bridge.bridge import Bridge
+
+        self.Bridge = Bridge
+        self.stub = make_stub()
+        self.addCleanup(lambda: shutil.rmtree(self.stub._tmp, ignore_errors=True))
+
+    def set(self, key, value):
+        return self.Bridge.cfg_set(self.stub, key, value)
+
+    def test_25_defaults(self):
+        self.assertEqual(DEFAULTS["hotkey_memo"], "Ctrl+Alt+M")
+        self.assertEqual(DEFAULTS["vault_autolock_min"], 15)
+        self.assertEqual(DEFAULTS["vault_clip_clear_sec"], 30)
+        self.assertEqual(DEFAULTS["backup_keep"], 10)
+        self.assertEqual(DEFAULTS["backup_autoupload"], False)
+        self.assertEqual(DEFAULTS["backup_autoupload_hours"], 24)
+        self.assertIsInstance(DEFAULTS["backup_targets"], list)
+        self.assertEqual(DEFAULTS["backup_targets"][0]["type"], "openlist")
+        self.assertEqual(DEFAULTS["file_favs"], [])
+
+    def test_26_hotkey_memo_parsed(self):
+        r = self.set("hotkey_memo", "Ctrl+Alt+J")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["data"], "Ctrl+Alt+J")
+
+    def test_27_vault_keys_clamped(self):
+        self.assertEqual(self.set("vault_autolock_min", 0)["data"], 0)
+        self.assertEqual(self.set("vault_autolock_min", 99999)["data"], 1440)
+        self.assertEqual(self.set("vault_autolock_min", "abc")["ok"], False)
+        self.assertEqual(self.set("vault_clip_clear_sec", 5)["data"], 5)
+        self.assertEqual(self.set("vault_clip_clear_sec", "x")["ok"], False)
+
+    def test_28_backup_keys(self):
+        self.assertEqual(self.set("backup_keep", 0)["data"], 1)
+        self.assertEqual(self.set("backup_keep", 99)["data"], 50)
+        r = self.set("backup_targets", [
+            {"type": "webdav", "name": "坚果云", "url": " https://dav.x/dav ",
+             "user": "u", "pwd": "p", "dir": "", "enabled": 1},
+            {"type": "openlist"}, "junk",
+        ])
+        self.assertTrue(r["ok"])
+        data = r["data"]
+        self.assertEqual(len(data), 2)  # junk 丢弃
+        self.assertEqual(data[0]["type"], "webdav")
+        self.assertEqual(data[0]["url"], "https://dav.x/dav")
+        self.assertEqual(data[0]["dir"], "LocalToolboxBackup")
+        self.assertIs(data[0]["enabled"], True)
+        self.assertEqual(data[1]["type"], "openlist")
+        self.assertEqual(self.set("backup_targets", "nope")["ok"], False)
+        self.assertIs(self.set("backup_autoupload", "yes")["data"], True)
+        self.assertEqual(self.set("backup_autoupload_hours", 2)["data"], 6)
+
+    def test_29_file_favs_and_memo_group(self):
+        r = self.set("file_favs", [
+            {"name": "文档", "path": "C:\\Users\\x\\Documents"},
+            {"path": "D:\\proj"},  # name 缺省 → basename
+            {"name": "bad"},       # 无 path 丢弃
+            {"name": "dup", "path": "D:\\proj"},  # 去重
+        ])
+        self.assertTrue(r["ok"])
+        self.assertEqual(len(r["data"]), 2)
+        self.assertEqual(r["data"][1]["name"], "proj")
+        self.assertEqual(self.set("file_favs", "nope")["ok"], False)
+        self.assertEqual(self.set("memo_pop_group_last", "7")["data"], 7)
+
+
+class TestV51OcrCfg(unittest.TestCase):
+    """v5.1：OCR 设置键（引擎白名单 / Umi 地址 / 后处理开关）。"""
+
+    def setUp(self):
+        from app.bridge.bridge import Bridge
+
+        self.Bridge = Bridge
+        self.stub = make_stub()
+        self.addCleanup(lambda: shutil.rmtree(self.stub._tmp, ignore_errors=True))
+
+    def set(self, key, value):
+        return self.Bridge.cfg_set(self.stub, key, value)
+
+    def test_30_defaults(self):
+        self.assertEqual(DEFAULTS["hotkey_ocr"], "Ctrl+Alt+O")
+        self.assertEqual(DEFAULTS["ocr_engine"], "winrt")
+        self.assertIs(DEFAULTS["ocr_merge_lines"], True)
+        self.assertEqual(DEFAULTS["ocr_umi_url"], "http://127.0.0.1:1224")
+        self.assertEqual(DEFAULTS["ocr_umi_path"], "")
+        self.assertIs(DEFAULTS["ocr_umi_autostart"], True)
+
+    def test_31_engine_whitelist(self):
+        self.assertEqual(self.set("ocr_engine", "umi")["data"], "umi")
+        self.assertEqual(self.set("ocr_engine", "rapid")["data"], "rapid")
+        r = self.set("ocr_engine", "hack")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["data"], "winrt")  # 非法回退默认
+
+    def test_32_strings_and_bools(self):
+        self.assertIs(self.set("ocr_merge_lines", "yes")["data"], True)
+        self.assertIs(self.set("ocr_umi_autostart", 0)["data"], False)
+        r = self.set("ocr_umi_url", " http://192.168.1.5:1224 ")
+        self.assertEqual(r["data"], "http://192.168.1.5:1224")
+        self.assertEqual(self.set("ocr_umi_path", " D:\\Umi\\Umi-OCR.exe ")["data"],
+                         "D:\\Umi\\Umi-OCR.exe")
+
+
 if __name__ == "__main__":
     unittest.main()

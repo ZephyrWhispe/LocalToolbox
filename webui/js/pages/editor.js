@@ -198,7 +198,8 @@ function saveAs() {
     okText: "选择位置并保存",
   }).then(function(v) {
     if (!v) return;
-    var fmt = String(v.fmt || "").trim().toLowerCase();
+    /* App.modal 多输入返回值数组（此前误用 v.fmt 取对象属性，恒为空导致转换被拦） */
+    var fmt = String(v[0] || "").trim().toLowerCase();
     if (["png", "jpg", "jpeg", "bmp", "webp"].indexOf(fmt) < 0) {
       App.toast("格式需为 png / jpg / bmp / webp", "error");
       return;
@@ -310,7 +311,8 @@ function showFormatPanel() {
     okText: "开始转换",
   }).then(function(v) {
     if (!v) return;
-    var fmt = String(v.fmt || "").trim().toLowerCase();
+    /* App.modal 多输入返回值数组（此前误用 v.fmt 取对象属性，恒为空导致转换被拦） */
+    var fmt = String(v[0] || "").trim().toLowerCase();
     if (["png", "jpg", "jpeg", "bmp", "webp"].indexOf(fmt) < 0) {
       App.toast("格式需为 png / jpg / bmp / webp", "error");
       return;
@@ -354,7 +356,10 @@ function pinToScreen() {
 
 function uploadImage() {
   if (!state.dataUrl) return App.toast("请先打开图片", "warn");
-  var provider = App.state.cfg.upload_provider || "imgur";
+  /* v5.3：配置键名此前写错（upload_provider），而后端 config.DEFAULTS 里叫
+     upload_service —— 读取永远拿到 undefined，于是"自定义图床"的设置在图片编辑器的
+     上传功能里被静默忽略、始终走 imgur。由 scripts/check_contract.py 查出。 */
+  var provider = App.state.cfg.upload_service || "imgur";
   call("upload_image", state.dataUrl, provider).then(function(r) {
     if (r.data && r.data.url) {
       navigator.clipboard.writeText(r.data.url).catch(function(){});

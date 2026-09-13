@@ -1,6 +1,6 @@
 /* 分流规则（统一规则中心）：V2rayN（xray/sing-box/v2ray）与 Clash（mihomo）共用。
  *
- * 单页面 + 页内页签（App.subnav 互斥区块），归入「网盘与网络」分组（Clash 之后）：
+ * 单页面 + 页内页签（App.subnav 互斥区块），归入「代理网络」分组（Clash 之后）：
  *   规则集     —— 精选规则集开关（GitHub 开源数据）+ 三内核就绪态
  *   自定义规则 —— 统一条目编辑（一处编辑双引擎生效）
  *   生效预览   —— 三内核编译产物 + 警告
@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  const GROUP = "网盘与网络";
+  const GROUP = "代理网络";
   const TYPES = ["DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "GEOSITE",
                  "IP-CIDR", "IP-CIDR6", "GEOIP", "DST-PORT", "PROCESS-NAME"];
   const POLICIES = ["DIRECT", "PROXY", "REJECT"];
@@ -143,13 +143,18 @@
         [state.entries[i], state.entries[j]] = [state.entries[j], state.entries[i]];
         renderEntries();
       };
-      box.appendChild(App.h("div", { class: "list-item", style: { gap: "6px" } },
+      /* v5.3：此前 7 个元素挤在一条 list-item 里（下拉+值输入+下拉+3 个按钮），
+         改两行：第一行选择与排序操作，第二行"值"输入独占宽度 */
+      box.appendChild(App.h("div", { class: "list-item", style: { gap: "6px", flexWrap: "wrap" } },
         App.h("label", { class: "chk", title: "启用" }, en),
-        typeSel, valIn, polSel,
+        typeSel, polSel,
+        App.h("span", { class: "grow" }),
         App.h("button", { class: "btn sm", title: "上移（优先级更高）", onclick: () => move(-1) }, "↑"),
         App.h("button", { class: "btn sm", title: "下移", onclick: () => move(1) }, "↓"),
         App.h("button", { class: "btn sm danger", title: "删除",
           onclick: () => { state.entries.splice(i, 1); renderEntries(); } }, "删"),
+        App.h("div", { style: { width: "100%", display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" } },
+          App.h("span", { class: "field-label" }, "值："), valIn),
       ));
     });
     if (!state.entries.length) {
@@ -249,8 +254,7 @@
 
       /* 页签 2：自定义规则 */
       refs.entryBox = App.h("div", { class: "list", style: { minHeight: "100px", maxHeight: "380px", overflowY: "auto" } });
-      refs.quickIn = App.h("input", { class: "input", placeholder: "DOMAIN-SUFFIX,example.com,REJECT（一行一条）",
-        style: { flex: "1", minWidth: "200px" } });
+      refs.quickIn = App.h("input", { class: "input grow-in", placeholder: "DOMAIN-SUFFIX,example.com,REJECT（一行一条）" });
       refs.quickIn.addEventListener("keydown", (ev) => { if (ev.key === "Enter") quickAdd(); });
       const paneCustom = App.h("div");
       paneCustom.appendChild(App.svcCard("自定义规则（用户顺序即优先级，置顶于精选集之前）",

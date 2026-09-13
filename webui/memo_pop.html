@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>备忘录</title>
+<style>
+  /* 设计令牌（同步自 app.css；弹窗为注入式独立页无法引用外部 CSS） */
+  :root, body.dark {
+    --bg: #0e1319; --bg2: #121924; --panel: #151d28; --card: #1a2532;
+    --card2: #213040; --hover: #24354a;
+    --border: rgba(255, 255, 255, 0.08); --border2: rgba(255, 255, 255, 0.14);
+    --text: #e8eef6; --muted: #92a1b3; --faint: #5d6b7c;
+    --accent: #4c8dff; --accent-soft: rgba(76, 141, 255, 0.16);
+    --ok: #37b48f; --danger: #ff6b6b; --warn: #ffb454;
+  }
+  body.light {
+    --bg: #f2f5f9; --bg2: #eaeff5; --panel: #ffffff; --card: #ffffff;
+    --card2: #f0f4f9; --hover: #e4ecf5;
+    --border: rgba(15, 30, 50, 0.1); --border2: rgba(15, 30, 50, 0.18);
+    --text: #1b2733; --muted: #5b6b7d; --faint: #8d9bab;
+    --accent: #2f6fe4; --accent-soft: rgba(47, 111, 228, 0.12);
+    --ok: #1d9e77; --danger: #d64545; --warn: #c07c1d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    font-size: 13px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border2); border-radius: 10px;
+    display: flex; flex-direction: column; user-select: none;
+  }
+  #mp-text {
+    margin: 8px 8px 6px; min-height: 96px; max-height: 150px; resize: none;
+    padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border2);
+    background: var(--bg2); color: var(--text); font-size: 13px;
+    line-height: 1.5; outline: none; flex: none; font-family: inherit;
+  }
+  #mp-text:focus { border-color: var(--accent); }
+  #mp-row {
+    display: flex; gap: 6px; align-items: center; padding: 0 8px 8px; flex: none;
+  }
+  #mp-group {
+    padding: 5px 8px; border-radius: 7px; border: 1px solid var(--border2);
+    background: var(--bg2); color: var(--text); font-size: 12px; outline: none;
+    max-width: 140px;
+  }
+  #mp-save {
+    padding: 5px 16px; border-radius: 7px; border: none; cursor: pointer;
+    background: var(--accent); color: #fff; font-size: 12px; font-weight: 600;
+  }
+  #mp-save:hover { filter: brightness(1.1); }
+  #mp-search {
+    flex: 1; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border2);
+    background: var(--bg2); color: var(--text); font-size: 12px; outline: none;
+  }
+  #mp-search:focus { border-color: var(--accent); }
+  #mp-list { flex: 1; overflow-y: auto; padding: 0 6px 6px; min-height: 0; }
+  .mp-item {
+    padding: 6px 9px; border-radius: 8px; cursor: pointer; margin-bottom: 3px;
+    border: 1px solid transparent;
+  }
+  .mp-item:hover { background: var(--hover); }
+  .mp-item .t {
+    font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px;
+  }
+  .mp-item .t .grp { color: var(--accent); font-size: 10.5px; font-weight: 400; }
+  .mp-item .t .pin { color: var(--warn); font-size: 11px; }
+  .mp-item .s {
+    font-size: 11.5px; color: var(--muted); margin-top: 1px;
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
+    overflow: hidden; word-break: break-all;
+  }
+  .mp-empty { text-align: center; color: var(--faint); padding: 22px 0; font-size: 12px; }
+  #mp-status {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted); background: var(--bg2);
+  }
+  #mp-status .grow { flex: 1; }
+  .pv-btn {
+    padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border2);
+    background: var(--card2); color: var(--muted); font-size: 11px; cursor: pointer;
+  }
+  .pv-btn:hover { color: var(--text); border-color: var(--accent); }
+  #mp-toast {
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    padding: 7px 14px; border-radius: 8px; font-size: 12px; display: none;
+    background: var(--card); border: 1px solid var(--border2);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .3); z-index: 60;
+  }
+  #mp-toast.warn { color: var(--warn); }
+  #mp-toast.ok { color: var(--ok); }
+</style>
+</head>
+<body class="dark">
+<textarea id="mp-text" placeholder="输入备忘…（Enter 保存，Shift+Enter 换行，首行作为标题）"></textarea>
+<div id="mp-row">
+  <select id="mp-group"></select>
+  <input id="mp-search" placeholder="搜索备忘…" autocomplete="off">
+  <button id="mp-save">保存</button>
+</div>
+<div id="mp-list"></div>
+<div id="mp-status">
+  <span id="mp-count"></span>
+  <span class="grow"></span>
+  <span>Enter 保存 · Ctrl+G 完整备忘录 · Esc 关闭</span>
+  <button id="mp-open" class="pv-btn" title="打开完整备忘录（Ctrl+G）">完整备忘录</button>
+</div>
+<div id="mp-toast"></div>
+<script>/*__POP_JS__*/</script>
+<script>
+/* 引导：等待 pywebview API 就绪后启动（pywebviewready + 1.5s 兜底），cfg 由后端注入。 */
+(function () {
+  "use strict";
+  var cfg = /*__CFG_JSON__*/;
+  var started = false;
+  function start() {
+    if (started) return;
+    started = true;
+    if (window.MemoPop && window.MemoPop.start) window.MemoPop.start(cfg);
+  }
+  if (window.pywebview && window.pywebview.api) start();
+  else {
+    window.addEventListener("pywebviewready", start);
+    setTimeout(start, 1500);
+  }
+})();
+</script>
+</body>
+</html>

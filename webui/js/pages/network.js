@@ -104,7 +104,7 @@
     await refresh();
   }
 
-  /* 管理员状态：非管理员时提示可一键提权重启（重启后开关零弹窗） */
+  /* 管理员状态：仅显示状态标签；提权重启按钮统一收在右下角状态栏（v5.4） */
   async function renderAdmin() {
     refs.adminBox.innerHTML = "";
     const r = await App.tryCall("app_info");
@@ -113,23 +113,11 @@
       refs.adminBox.appendChild(App.h("span", { class: "tag ok" }, "已以管理员身份运行"));
       refs.adminBox.appendChild(App.h("span", { class: "hint" },
         "开关功能直接执行，不会弹出 UAC 授权框"));
-      return;
+    } else {
+      refs.adminBox.appendChild(App.h("span", { class: "tag warn" }, "非管理员权限"));
+      refs.adminBox.appendChild(App.h("span", { class: "hint" },
+        "每次开关都会弹出 UAC；点右下角「提权重启」可一次性提权"));
     }
-    refs.adminBox.appendChild(App.h("span", { class: "tag warn" }, "非管理员权限"));
-    const btn = App.h("button", {
-      class: "btn sm primary",
-      onclick: async () => {
-        if (!(await App.confirm("以管理员身份重启",
-          "将弹出一次 UAC 授权。授权后本应用以管理员身份重启，\n网络发现 / 文件共享的开关将不再弹出授权框。"))) return;
-        const rr = await App.tryCall("network_relaunch_admin");
-        if (!rr.ok) { App.toast(rr.err, "error", 6000); return; }
-        App.toast(rr.data || "正在以管理员身份重启…", "info", 5000);
-      },
-      html: App.icon("shield", 12) + "<span>以管理员身份重启应用</span>",
-    });
-    refs.adminBox.appendChild(btn);
-    refs.adminBox.appendChild(App.h("span", { class: "hint" },
-      "否则每次开关都会弹出 UAC 授权框"));
   }
 
   /* ---------------- 页面注册 ---------------- */
@@ -163,35 +151,37 @@
         App.h("div", { class: "sub" }, "一键开关网络发现与文件共享，让资源管理器的「网络」能看到其他设备"),
       ));
 
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "card-title" }, "网络功能开关"),
-        refs.adminBox = App.h("div", { class: "row", style: { marginBottom: "4px" } }),
-        App.h("div", { class: "row", style: { flexDirection: "column", alignItems: "flex-start", gap: "12px" } },
-          refs.discoveryLabel,
-          refs.sharingLabel,
+      /* v5.3：三张卡各自只有一两行控件，单列纵向堆叠在宽屏下会留下大片空白，
+         改为自适应两列（说明卡跨整行） */
+      el.appendChild(App.h("div", { class: "card-cols" },
+        App.h("div", { class: "card" },
+          App.h("div", { class: "card-title" }, "网络功能开关"),
+          refs.adminBox = App.h("div", { class: "row", style: { marginBottom: "4px" } }),
+          App.h("div", { class: "row", style: { flexDirection: "column", alignItems: "flex-start", gap: "12px" } },
+            refs.discoveryLabel,
+            refs.sharingLabel,
+          ),
         ),
-      ));
-
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "card-title" }, "当前状态检测"),
-        refs.statusList,
-        App.h("div", { class: "sep" }),
-        App.h("div", { class: "row" },
-          refs.stateHint,
-          App.h("span", { class: "grow" }),
-          refs.recheckBtn = App.h("button", {
-            class: "btn sm",
-            html: App.icon("refresh", 12) + "<span>重新检测</span>",
-            onclick: refresh,
-          }),
+        App.h("div", { class: "card" },
+          App.h("div", { class: "card-title" }, "当前状态检测"),
+          refs.statusList,
+          App.h("div", { class: "sep" }),
+          App.h("div", { class: "row" },
+            refs.stateHint,
+            App.h("span", { class: "grow" }),
+            refs.recheckBtn = App.h("button", {
+              class: "btn sm",
+              html: App.icon("refresh", 12) + "<span>重新检测</span>",
+              onclick: refresh,
+            }),
+          ),
         ),
-      ));
-
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "hint" },
-          "说明：开启“网络发现”会同时把当前网络设为“专用”、启用功能发现服务并开放防火墙规则，",
-          "这样资源管理器的“网络”里才能看到其他设备。以上操作需要管理员权限；",
-          "以管理员身份运行后开关将直接执行，不再弹出授权框。",
+        App.h("div", { class: "card span" },
+          App.h("div", { class: "hint" },
+            "说明：开启“网络发现”会同时把当前网络设为“专用”、启用功能发现服务并开放防火墙规则，",
+            "这样资源管理器的“网络”里才能看到其他设备。以上操作需要管理员权限；",
+            "点状态栏右下角「提权重启」以管理员身份运行后，开关将直接执行，不再弹出授权框。",
+          ),
         ),
       ));
 

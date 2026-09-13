@@ -26,14 +26,16 @@ App.registerPage({
 var state = { dataUrl: null, rows: 2, cols: 2, tiles: [] };
 
 function mount(el) {
-  var toolbar = h("div", {class: "row", style: {gap: "8px", marginBottom: "12px", flexWrap: "wrap"}},
+  el.classList.add("page-flex", "canvas-page");   // v5.3：画布页铺满内容区
+  var toolbar = h("div", {class: "row", style: {gap: "8px", flexWrap: "wrap"}},
     h("button", {class: "btn sm", onclick: pickFile}, "选择图片"),
-    h("label", {}, "行:"),
-    h("input", {type: "number", value: "2", min: "1", max: "20",
-      style: {width: "60px"}, onchange: function(e) { state.rows = parseInt(e.target.value) || 2; }}),
-    h("label", {}, "列:"),
-    h("input", {type: "number", value: "2", min: "1", max: "20",
-      style: {width: "60px"}, onchange: function(e) { state.cols = parseInt(e.target.value) || 2; }}),
+    /* v5.3：补 .input 类（此前是原生控件，深色主题下白底）+ .field-label 标签 */
+    h("span", {class: "field-label"}, "行:"),
+    h("input", {class: "input", type: "number", value: "2", min: "1", max: "20",
+      style: {width: "68px"}, onchange: function(e) { state.rows = parseInt(e.target.value) || 2; }}),
+    h("span", {class: "field-label"}, "列:"),
+    h("input", {class: "input", type: "number", value: "2", min: "1", max: "20",
+      style: {width: "68px"}, onchange: function(e) { state.cols = parseInt(e.target.value) || 2; }}),
     h("button", {class: "btn sm accent", onclick: doSplit}, "分割"),
     h("button", {class: "btn sm", onclick: saveAll}, "全部保存")
   );
@@ -45,12 +47,19 @@ function mount(el) {
 
   var tileGrid = h("div", {id: "split-tiles", class: "split-tile-grid",
     style: {display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
-      gap: "8px", marginTop: "12px"}});
+      gap: "8px"}});
   state.tileGrid = tileGrid;
 
-  el.appendChild(toolbar);
-  el.appendChild(preview);
-  el.appendChild(tileGrid);
+  el.appendChild(h("div", {class: "page-head"},
+    h("h2", null, "图片分割"),
+    h("div", {class: "sub"}, "把一张图按行列切成小块，可逐块复制或保存")));
+  el.appendChild(h("div", {class: "card"}, toolbar));
+  el.appendChild(h("div", {class: "card"},
+    h("div", {class: "card-title"}, "原图预览"),
+    preview));
+  el.appendChild(h("div", {class: "card fill"},
+    h("div", {class: "card-title"}, "分割结果"),
+    tileGrid));
 }
 
 function pickFile() {

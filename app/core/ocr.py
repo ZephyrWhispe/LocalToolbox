@@ -166,3 +166,138 @@ def recognize_bytes(png_bytes, lang=None):
         raise RuntimeError("PIL 不可用，无法解码图片")
     img = _PILImage.open(io.BytesIO(png_bytes))
     return recognize(img, lang=lang)
+
+
+# ---------------------------------------------------------------------------
+# v5.1 引擎调度层：winrt（内置）/ rapid（本地 RapidOCR 包）/ umi（Umi-OCR HTTP）
+# ---------------------------------------------------------------------------
+
+_ENGINES = ("winrt", "rapid", "umi")
+_UPSCALE_MIN_W = 1000
+
+
+def rapid_available():
+    """本地 RapidOCR python 包是否可用（exe 默认不带，源码运行 pip 安装即生效）。"""
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def engine_status():
+    """各引擎可用性（设置页/OCR 页状态卡用）。"""
+    return {
+        "winrt": is_available(),
+        "rapid": rapid_available(),
+    }
+
+
+def _upscale_small(img):
+    """小图放大 2x（winrt/rapid 对小字号识别率明显提升），宽 ≥1000px 不动。"""
+    if _PILImage is None or img.width >= _UPSCALE_MIN_W:
+        return img
+    try:
+        return img.resize((img.width * 2, img.height * 2), _PILImage.LANCZOS)
+    except Exception:
+        return img
+
+
+def _recognize_winrt(img, lang=None):
+    if not is_available():
+        raise RuntimeError(_UNAVAILABLE_MSG)
+    return recognize(_upscale_small(img), lang=lang)
+
+
+def _recognize_rapid(img):
+    if not rapid_available():
+        raise RuntimeError(
+            "RapidOCR 内核不可用：源码运行请先 pip install rapidocr_onnxruntime"
+            "（打包版请改用 winrt 引擎或下载 Umi-OCR 内核）")
+    import numpy as np
+    from rapidocr_onnxruntime import RapidOCR
+    global _RAPID_ENGINE
+    try:
+        _RAPID_ENGINE
+    except NameError:
+        _RAPID_ENGINE = RapidOCR()
+    arr = np.array(_upscale_small(img.convert("RGB")))
+    result, _elapse = _RAPID_ENGINE(arr)
+    lines = []
+    for item in result or []:
+        box, text, _score = item[0], item[1], item[2]
+        xs = [p[0] for p in box]
+        ys = [p[1] for p in box]
+        lines.append({
+            "text": str(text),
+            "rect": {"x": int(min(xs)), "y": int(min(ys)),
+                     "w": int(max(xs) - min(xs)), "h": int(max(ys) - min(ys))},
+        })
+    return {"text": "\n".join(ln["text"] for ln in lines), "lines": lines}
+
+
+def recognize_any(img, engine="winrt", lang=None, umi_opts=None):
+    """统一识别入口：按引擎分发；未知引擎回退 winrt；失败抛 RuntimeError（中文）。
+
+    umi_opts：{"url","exe_path","autostart"}（仅 umi 引擎使用，由桥接层从 cfg 组装）。
+    """
+    engine = str(engine or "winrt")
+    if engine == "rapid":
+        return _recognize_rapid(img)
+    if engine == "umi":
+        from .ocr_umi import recognize_umi
+        return recognize_umi(img, **(umi_opts or {}))
+    return _recognize_winrt(img, lang=lang)
+
+
+# -- 文本后处理 ---------------------------------------------------------------
+
+_CJK = r"\u4e00-\u9fff\u3400-\u4dbf"
+_SENT_END = "。！？；…?"
+_NO_MERGE_START = "，、；：）」』】》〉"
+
+
+def _tidy_inline(line):
+    """行内规整：去首尾空格、去除 CJK 字符（含全角标点）之间的空格。"""
+    import re
+    line = str(line).replace("\u3000", " ").strip()
+    if not line:
+        return ""
+    # 汉字 + CJK 标点 + 全角符号之间的空白去掉（OCR 常见）；中英之间保留
+    cjk = r"\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff01-\uff5e\u2018\u2019\u201c\u201d"
+    line = re.sub(r"(?<=[%s])\s+(?=[%s])" % (cjk, cjk), "", line)
+    line = re.sub(r"\s{2,}", " ", line)
+    return line
+
+
+def _should_merge(prev, nxt):
+    """中文相邻行合并判定：上行不以句末标点收尾，下行不以起始标点开头。"""
+    if not prev or not nxt:
+        return False
+    if prev[-1] in _SENT_END:
+        return False
+    if nxt[0] in _NO_MERGE_START or nxt[0] in _SENT_END:
+        return False
+    return True
+
+
+def postprocess(text, merge_lines=True):
+    """识别文本后处理：去空行/行首尾空格、CJK 间空格规整、中文相邻行智能合并。
+
+    空行视为段落分隔（不跨空行合并）；纯英文/代码截图建议关掉合并。
+    """
+    raw_lines = str(text or "").replace("\r\n", "\n").split("\n")
+    lines = [_tidy_inline(l) for l in raw_lines]
+    merged = []
+    prev_empty = True
+    for l in lines:
+        if not l:
+            prev_empty = True
+            continue
+        if merge_lines and merged and not prev_empty \
+                and _should_merge(merged[-1], l):
+            merged[-1] = merged[-1] + (" " if _needs_space(merged[-1], l) else "") + l
+        else:
+            merged.append(l)
+        prev_empty = False
+    return "\n".join(merged)

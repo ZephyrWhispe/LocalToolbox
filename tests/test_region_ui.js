@@ -541,7 +541,7 @@ function testPageRegistration() {
   const clash = load("clash.js");
   check("clash.js 注册单个 Clash 页（v2ray 式页签管理）",
         clash.length === 1 && clash[0].id === "clash", JSON.stringify(clash.map((p) => p.id)));
-  check("归入「网盘与网络」分组", clash.every((p) => p.group === "网盘与网络"),
+  check("归入「代理网络」分组（v5.0 重排）", clash.every((p) => p.group === "代理网络"),
         JSON.stringify(clash.map((p) => p.group)));
   check("页面带 mount / show",
         clash.every((p) => typeof p.mount === "function" && typeof p.show === "function"));
@@ -552,8 +552,8 @@ function testPageRegistration() {
   check("routing.js 注册单个分流规则页（v2ray 式页签管理）",
         routing.length === 1 && routing[0].id === "routing",
         JSON.stringify(routing.map((p) => p.id)));
-  check("分流规则页归入「网盘与网络」分组",
-        routing.every((p) => p.group === "网盘与网络"),
+  check("分流规则页归入「代理网络」分组（v5.0 重排）",
+        routing.every((p) => p.group === "代理网络"),
         JSON.stringify(routing.map((p) => p.group)));
   check("分流规则页带 mount / show",
         routing.every((p) => typeof p.mount === "function" && typeof p.show === "function"));
@@ -572,11 +572,11 @@ function testPageRegistration() {
     check("工具箱注册 " + want, tids.indexOf(want) >= 0, JSON.stringify(tids));
   }
   const gone = ["tool-format", "tool-codec", "tool-hash", "tool-verify",
-                "tool-snapshot", "tool-export"];
+                "tool-snapshot", "tool-export", "tool-ocr"];  // v5.1：OCR 独立成页
   const kept = tids.filter((x) => gone.includes(x));
   check("旧工具页已合并删除", kept.length === 0, "残留 " + JSON.stringify(kept));
-  check("工具页总数 16（目录 + 15 工具页，tool-* 均 hidden）",
-        toolsPages.length === 16 &&
+  check("工具页总数 15（目录 + 14 工具页，tool-* 均 hidden；v5.1 OCR 独立）",
+        toolsPages.length === 15 &&
         toolsPages.filter((p) => p.id !== "tools").every((p) => p.hidden),
         "n=" + toolsPages.length);
   const uiSrc = fs.readFileSync(path.join(ROOT, "webui", "js", "ui.js"), "utf8");

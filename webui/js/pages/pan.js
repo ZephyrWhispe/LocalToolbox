@@ -535,7 +535,7 @@
     id: "pan",
     title: "网盘挂载",
     icon: "folder",
-    group: "网盘与网络",
+    group: "网盘挂载",
 
     async mount(el) {
       refs = {};
@@ -575,22 +575,13 @@
       const paneMount = App.h("div");
       const paneUpdate = App.h("div");
 
-      /* 卡片 1：OpenList 服务（v3.2：实时监控 / 重启 / 日志 / 自启动） */
+      /* 卡片 1：OpenList 服务（v3.2：实时监控 / 重启 / 日志 / 自启动）
+         v5.2 P4：维护类操作收进「维护 ⋯」菜单，常驻仅 启动/停止/管理界面 */
       paneSvc.appendChild(App.svcCard(
         "OpenList 服务（聚合 40+ 网盘驱动，统一 WebDAV 接口）",
         [
           App.row(
             App.h("span", { class: "field-label" }, "程序路径："), refs.binVal,
-            App.h("button", { class: "btn", onclick: async () => {
-              const p = await App.tryCall("pan_pick_bin");
-              if (p.ok && p.data) await tryCall2("pan_set_bin", p.data);
-              await refreshState();
-            } }, "选择..."),
-            refs.dlBin = App.h("button", { class: "btn", onclick: downloadBin }, "自动下载"),
-            App.h("button", {
-              class: "btn", onclick: refreshBins,
-              title: "重新探测程序（含手动放置）并检查是否有新版本，不下载",
-            }, "检查更新"),
           ),
           App.row(
             App.h("span", { class: "field-label" }, "监听："), refs.host,
@@ -603,7 +594,6 @@
             App.h("label", { class: "switch" }, refs.fwTgl, App.h("span", { class: "track" }),
               "放行防火墙端口"),
             App.h("button", { class: "btn", onclick: openWeb }, "打开管理界面"),
-            App.h("button", { class: "btn", onclick: pickAndImport }, "导入配置..."),
           ),
           App.h("div", { class: "hint", style: { whiteSpace: "pre-line", marginTop: "8px" } },
             "说明：OpenList 是开源自托管网关，支持阿里云盘 / 百度网盘 / 夸克 / OneDrive 等 40+ 网盘。\n" +
@@ -611,10 +601,28 @@
             "驱动授权通过管理界面完成；服务异常退出时系统托盘会收到通知。"),
         ],
         [refs.start, refs.stop,
-          App.row(
-            refs.restartBtn = App.h("button", { class: "btn", onclick: restartServer }, "重启"),
-          ),
-          App.h("button", { class: "btn", onclick: refreshLog }, "刷新日志"),
+          App.h("button", {
+            class: "btn", title: "程序维护",
+            onclick: (ev) => App.overflowMenu(ev.currentTarget, [
+              { label: "重启服务", icon: "refresh", onclick: restartServer },
+              { label: "刷新日志", icon: "list", onclick: refreshLog },
+              "sep",
+              { label: "导入配置…", icon: "folder", hint: "openlist.json",
+                onclick: pickAndImport },
+              "sep",
+              { label: "选择程序…", icon: "filetext",
+                onclick: async () => {
+                  const p = await App.tryCall("pan_pick_bin");
+                  if (p.ok && p.data) await tryCall2("pan_set_bin", p.data);
+                  await refreshState();
+                } },
+              { label: "自动下载内核", icon: "arrowup",
+                hint: "约 30MB",
+                onclick: downloadBin },
+              { label: "检查更新", icon: "search",
+                hint: "重新探测程序并检查新版本",
+                onclick: refreshBins },
+            ]) }, "维护 ⋯"),
           refs.stateTag],
         refs.log,
       ));
@@ -648,7 +656,7 @@
         App.h("option", { value: "folder" }, "文件夹"),
       );
       refs.rcTarget = App.h("input", {
-        class: "input", placeholder: "盘符字母（如 V）或文件夹路径", style: { flex: "1" },
+        class: "input grow-in", placeholder: "盘符字母（如 V）或文件夹路径",
       });
       refs.rcUser = App.h("input", {
         class: "input", placeholder: "账号（留空 = 匿名）", style: { width: "120px" },
@@ -660,11 +668,14 @@
       paneMount.appendChild(App.svcCard(
         "Rclone 本地挂载（把 OpenList 网盘挂载为盘符 / 文件夹）",
         [
+          /* v5.3：这两行此前分别塞了 9 个和 8 个元素（状态/按钮/参数全挤一行），
+             换行后每个控件都很窄。按语义拆开：依赖状态行 / 挂载参数行 / 账号行 */
           App.row(
             App.h("span", { class: "field-label" }, "WinFsp 驱动："), refs.rcWinfsp,
             App.h("button", { class: "btn", onclick: async () => refreshRclone() }, "检测"),
             App.h("button", { class: "btn", onclick: installWinfsp }, "安装 WinFsp"),
-            App.h("span", { style: { flex: 1 } }),
+          ),
+          App.row(
             App.h("span", { class: "field-label" }, "rclone："), refs.rcBin,
             App.h("button", { class: "btn", onclick: downloadRcloneBin }, "自动下载"),
             App.h("button", {
@@ -674,6 +685,8 @@
           ),
           App.row(
             App.h("span", { class: "field-label" }, "挂载目标："), refs.rcType, refs.rcTarget,
+          ),
+          App.row(
             App.h("span", { class: "field-label" }, "账号："), refs.rcUser,
             App.h("span", { class: "field-label" }, "密码："), refs.rcPwd,
             App.h("button", { class: "btn primary", onclick: mountRclone }, "挂载"),
@@ -711,10 +724,12 @@
       ));
 
       /* 卡片 5：文件浏览 */
-      refs.crumb = App.h("div", { class: "breadcrumb" }, null);
+      /* v5.4 修复：面包屑自带边框（视觉上是一个"框"），此前在 .row 里按内容
+         自适应宽度，与卡片两侧不对齐；改为撑满整行（margin 交给 .row 管理） */
+      refs.crumb = App.h("div", { class: "breadcrumb",
+        style: { flex: "1", minWidth: "0", marginBottom: "0" } }, null);
       refs.saveDir = App.h("input", {
-        class: "input", placeholder: "下载保存目录（留空 = 设置页保存目录）",
-        style: { flex: "1", minWidth: "200px" },
+        class: "input grow-in", placeholder: "下载保存目录（留空 = 设置页保存目录）",
       });
       const saveDirBrowse = App.h("button", {
         class: "btn", onclick: async () => {

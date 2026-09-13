@@ -8,9 +8,11 @@ import webview
 
 from app.bridge.bridge import Bridge
 from app.core import logger as applog
+from app.core import win_shell
+from app.core import win_spec
 from app.core.config import DATA_HOME
 from app.core.single_instance import acquire_or_exit, start_show_watcher
-from app.core.tray import TrayController
+from app.core.tray import TrayController, service_submenu as tray_service_submenu
 
 APP_TITLE = "LocalToolbox"
 
@@ -229,38 +231,122 @@ def main():
     # 整窗。（自绘标题栏原走的 win_begin_drag/WM_NCLBUTTONDOWN 在 WebView2
     # 上因鼠标捕获不生效而拖不动窗口，已弃用。）
     geo_kw = _restore_geometry(bridge.cfg)
-    window = webview.create_window(
-        APP_TITLE,
-        ui_index(),
-        js_api=bridge,
-        width=geo_kw.get("width", 1320),
-        height=geo_kw.get("height", 860),
-        x=geo_kw.get("x"),
-        y=geo_kw.get("y"),
-        frameless=True,
-        shadow=False,
-        easy_drag=True,
-        hidden=bool(bridge.cfg.get("start_minimized", False)),
-        on_top=bool(bridge.cfg.get("win_on_top", False)),
-        background_color="#0f1419",
-    )
+    # v5.3：窗口形态统一由 app/core/win_spec.py 下发（生产与 UI 冒烟测试同源）。
+    # 材质：仅在探测确认支持时才建透明窗口 —— 透明但没材质会直接透出桌面，
+    # 比"不透明"难看得多，因此探测不通过一律保持不透明（观感等于改造前）。
+    material_mode = win_spec.material_mode(bridge.cfg)
+    wkw = win_spec.window_kwargs(bridge.cfg, geo_kw)      # 透明决策在 win_spec 内统一做
+    transparent = bool(wkw.get("transparent"))
+    window = webview.create_window(APP_TITLE, ui_index(), js_api=bridge, **wkw)
     bridge.attach(window)
+    bridge.set_win_transparent(transparent)
+
+    def _apply_material():
+        """HTML 加载完成 → 应用材质 →（透明窗口下）再显示窗口。
+
+        顺序不可颠倒：透明窗口在页面内容就绪前可见会直接透出桌面。
+        """
+        st = win_shell.apply(
+            win_shell.hwnd_of(window), material_mode,
+            dark=str(bridge.cfg.get("theme") or "dark") != "light")
+        bridge.set_material_state(st)
+        log.info("窗口材质 %s：%s（%s）", material_mode,
+                 st.get("applied"), st.get("reason") or "无")
+        if transparent and not bridge.cfg.get("start_minimized", False):
+            try:
+                window.show()
+            except Exception as e:   # 显示失败不阻断启动，托盘仍可唤出
+                log.warning("材质窗口显示失败：%s", e)
+
+    window.events.loaded += _apply_material
     # v4.6：第二实例启动时通过命名事件唤起本实例主窗口（单实例锁拒启场景）
     start_show_watcher(lambda: (window.show(), window.restore()))
     if action and path:
         bridge.set_pending_action(action, path)
 
     # 托盘常驻：关闭窗口时隐藏到托盘，托盘菜单「退出程序」才真正退出
-    tray = TrayController(
-        on_show=lambda: window.show(),
-        on_quit=lambda: window.destroy(),
-        title=APP_TITLE,
-    )
     # v3.2：OpenList 异常退出 → 托盘通知；v3.5d：托盘通知总开关（关闭后静默）
     def _tray_notify(title, msg):
         if bridge.cfg.get("tray_notify", True):
             tray.notify(msg, title)
 
+    # v5.4 O5：托盘服务快捷开关——剪贴板同步 / OpenList / 系统代理（Clash）。
+    # 交互同构 openlist-desktop 托盘：服务子菜单 + 启停两项按运行态互斥置灰；
+    # pystray 动态菜单每次打开重新求值 → 状态与后端实时一致；操作后经
+    # emit 事件推给前端页面，实现托盘 ↔ 页面双向同步。
+    def _state_running(r):
+        return bool(isinstance(r, dict) and r.get("ok")
+                    and isinstance(r.get("data"), dict)
+                    and r["data"].get("running"))
+
+    def _clip_running():
+        try:
+            return _state_running(bridge.clip_get_state())
+        except Exception:
+            return False
+
+    def _openlist_running():
+        try:
+            return _state_running(bridge.pan_get_state())
+        except Exception:
+            return False
+
+    def _clash_running():
+        try:
+            return bool(bridge._clash.state().get("running"))
+        except Exception:
+            return False
+
+    def _clash_sysproxy():
+        try:
+            return bool(bridge._clash.state().get("sys_proxy"))
+        except Exception:
+            return False
+
+    def _tray_act(name, fn):
+        """托盘线程内执行服务操作；失败走气泡通知（不弹窗、不阻塞菜单线程）。"""
+        try:
+            r = fn()
+            if isinstance(r, dict) and not r.get("ok", True):
+                _tray_notify(name, str(r.get("err") or "操作失败"))
+        except Exception as e:
+            _tray_notify(name, "操作失败：%s" % e)
+
+    def _tray_service_menu():
+        """三个服务子菜单；pystray 缺库时为空列表（基础菜单兜底）。"""
+        specs = (
+            ("剪贴板同步",
+             lambda: _tray_act("剪贴板同步", bridge.clip_start),
+             lambda: _tray_act("剪贴板同步", bridge.clip_stop),
+             _clip_running),
+            ("OpenList",
+             lambda: _tray_act(
+                 "OpenList",
+                 lambda: bridge.pan_start(
+                     bridge.cfg.get("openlist_host", "127.0.0.1"),
+                     bridge.cfg.get("openlist_port", 15244),
+                     bridge.cfg.get("openlist_fw", True))),
+             lambda: _tray_act("OpenList", bridge.pan_stop),
+             _openlist_running),
+            ("系统代理",
+             # 未运行 → 启动 Clash（含设置系统代理）；运行中 → 仅切换代理开关
+             lambda: _tray_act(
+                 "系统代理",
+                 (lambda: bridge.clash_start()) if not _clash_running()
+                 else (lambda: bridge.clash_set_sysproxy(True))),
+             lambda: _tray_act("系统代理",
+                               lambda: bridge.clash_set_sysproxy(False)),
+             _clash_sysproxy),
+        )
+        return [m for m in (
+            tray_service_submenu(*s) for s in specs) if m is not None]
+
+    tray = TrayController(
+        on_show=lambda: window.show(),
+        on_quit=lambda: window.destroy(),
+        title=APP_TITLE,
+        extra_menu=_tray_service_menu,
+    )
     bridge.set_tray_notify(_tray_notify)
     # v3.5c：关闭按钮「退出程序」选项 → 走托盘统一退出链路（quitting 置位）
     bridge.set_tray_quit(tray._quit)

@@ -117,6 +117,15 @@ class ClipboardMonitor:
                 "kind TEXT, text TEXT, img_path TEXT, ts REAL, pinned INTEGER DEFAULT 0)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_clip_ts ON clip_history(ts DESC)")
+            # v5.4 O1：剪贴板分组（Ditto 式归组检索）
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS clip_groups "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
+            try:
+                conn.execute(
+                    "ALTER TABLE clip_history ADD COLUMN group_id INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
             conn.commit()
         finally:
             conn.close()
@@ -260,22 +269,30 @@ class ClipboardMonitor:
             "(SELECT id FROM clip_history ORDER BY ts DESC LIMIT ?)",
             (self._limit,))
 
-    def list_entries(self, limit=50, offset=0, query=""):
+    def list_entries(self, limit=50, offset=0, query="", kind="", group_id=None):
         conn = sqlite3.connect(self._db_path)
         try:
+            conds, params = [], []
             if query:
-                sql = ("SELECT id, kind, text, img_path, ts, pinned FROM clip_history "
-                       "WHERE text LIKE ? ORDER BY ts DESC LIMIT ? OFFSET ?")
-                params = ("%%%s%%" % query, limit, offset)
-            else:
-                sql = ("SELECT id, kind, text, img_path, ts, pinned FROM clip_history "
-                       "ORDER BY ts DESC LIMIT ? OFFSET ?")
-                params = (limit, offset)
-            cur = conn.execute(sql, params)
+                # v5.2：显式 ESCAPE，%/_ 关键词可正确匹配（与 memo_store 同方案）
+                conds.append("text LIKE ? ESCAPE '\\'")
+                params.append("%" + query.replace("\\", "\\\\")
+                              .replace("%", r"\%").replace("_", r"\_") + "%")
+            if kind in ("text", "image"):
+                conds.append("kind = ?")
+                params.append(kind)
+            if group_id is not None:
+                conds.append("group_id = ?")
+                params.append(int(group_id))
+            where = ("WHERE " + " AND ".join(conds)) if conds else ""
+            params += [limit, offset]
+            cur = conn.execute(
+                "SELECT id, kind, text, img_path, ts, pinned, group_id FROM clip_history "
+                + where + " ORDER BY pinned DESC, ts DESC LIMIT ? OFFSET ?", params)
             rows = cur.fetchall()
             return [{"id": r[0], "kind": r[1], "text": r[2] or "",
                      "img_path": r[3] or "", "ts": r[4],
-                     "pinned": bool(r[5])} for r in rows]
+                     "pinned": bool(r[5]), "group_id": r[6] or 0} for r in rows]
         finally:
             conn.close()
 
@@ -319,6 +336,24 @@ class ClipboardMonitor:
         finally:
             conn.close()
 
+    def dedup(self):
+        """合并相同内容的文本条目（v5.4）：每组去重保留一条，返回删除条数。
+
+        保留规则：组内若有置顶条目保留最新置顶，否则保留最新一条（id 最大）。
+        图片条目不参与合并（img_path 各自独立）。
+        """
+        conn = sqlite3.connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "DELETE FROM clip_history WHERE kind='text' AND id NOT IN ("
+                "  SELECT CASE WHEN MAX(CASE WHEN pinned=1 THEN id END) IS NOT NULL"
+                "         THEN MAX(CASE WHEN pinned=1 THEN id END) ELSE MAX(id) END"
+                "  FROM clip_history WHERE kind='text' GROUP BY text)")
+            conn.commit()
+            return cur.rowcount or 0
+        finally:
+            conn.close()
+
     def get_image_data(self, entry_id):
         conn = sqlite3.connect(self._db_path)
         try:
@@ -337,13 +372,73 @@ class ClipboardMonitor:
         conn = sqlite3.connect(self._db_path)
         try:
             cur = conn.execute(
-                "SELECT id, kind, text, img_path, ts, pinned FROM clip_history "
+                "SELECT id, kind, text, img_path, ts, pinned, group_id FROM clip_history "
                 "WHERE id=?", (entry_id,))
             r = cur.fetchone()
             if not r:
                 return None
             return {"id": r[0], "kind": r[1], "text": r[2] or "",
-                    "img_path": r[3] or "", "ts": r[4], "pinned": bool(r[5])}
+                    "img_path": r[3] or "", "ts": r[4], "pinned": bool(r[5]),
+                    "group_id": r[6] or 0}
+        finally:
+            conn.close()
+
+    # -- 分组（v5.4 O1，Ditto 式归组检索） --------------------------------
+
+    def groups(self):
+        """分组列表（含每组条目计数）。"""
+        conn = sqlite3.connect(self._db_path)
+        try:
+            cur = conn.execute(
+                "SELECT g.id, g.name,"
+                " (SELECT COUNT(*) FROM clip_history h WHERE h.group_id = g.id)"
+                " FROM clip_groups g ORDER BY g.id")
+            return [{"id": r[0], "name": r[1], "count": r[2]}
+                    for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def group_add(self, name):
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("分组名不能为空")
+        if len(name) > 24:
+            name = name[:24]
+        conn = sqlite3.connect(self._db_path)
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM clip_groups WHERE name=?", (name,)).fetchone()
+            if exists:
+                raise ValueError("分组已存在")
+            cur = conn.execute("INSERT INTO clip_groups(name) VALUES (?)", (name,))
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+    def group_delete(self, group_id):
+        """删除分组：组内条目移回未分组。"""
+        conn = sqlite3.connect(self._db_path)
+        try:
+            conn.execute("UPDATE clip_history SET group_id=0 WHERE group_id=?",
+                         (int(group_id),))
+            conn.execute("DELETE FROM clip_groups WHERE id=?", (int(group_id),))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def group_set(self, entry_ids, group_id):
+        """把条目移入分组（group_id=0 移出）。"""
+        ids = [int(i) for i in (entry_ids or [])]
+        if not ids:
+            return 0
+        conn = sqlite3.connect(self._db_path)
+        try:
+            cur = conn.executemany(
+                "UPDATE clip_history SET group_id=? WHERE id=?",
+                [(int(group_id or 0), i) for i in ids])
+            conn.commit()
+            return cur.rowcount
         finally:
             conn.close()
 

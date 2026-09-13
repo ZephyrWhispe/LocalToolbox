@@ -1,9 +1,11 @@
 /* 工具箱（v4.5 重构）：
- *   目录页（搜索 / 收藏 / 最近使用 / 分区网格） + 15 个工具二级页（toolShell 统一壳）。
+ *   目录页（搜索 / 收藏 / 最近使用 / 分区网格） + 工具二级页（toolShell 统一壳）。
  * 合并：tool-text（格式化/编码解码/文本对比）、tool-files（哈希/清单校验/目录快照/列表导出）。
  * 新增：tool-uuid（UUID v4/v7）、tool-radix（BigInt 任意进制转换）。
  * 统一结果面板 App.toolOut（ui.js）、Ctrl+K 直达 App.toolLauncher（ui.js）。
  * 后端：tool_*（app/bridge/tools_api.py）与 dns_api / editor_api / proxy_* 调用保持不变。
+ * v5.5：系统类工具（系统优化/硬件信息/显示器信息/无人值守安装）提升为一级页面，
+ *   归入侧栏「系统」分组；工具箱原「系统与网络」分区改为「网络工具」。
  */
 (function () {
   "use strict";
@@ -96,18 +98,20 @@
     return btn;
   }
 
-  /* ================= 工具页壳：返回 + 标题 + 星标 + 内容 ================= */
-  function toolShell(t, buildBody) {
+  /* ================= 工具页壳：返回 + 标题 + 星标 + 内容 =================
+     v5.5：topLevel=true 时为一级页面（不显示「返回工具箱」与收藏星标） */
+  function toolShell(t, buildBody, topLevel) {
     const head = App.h("div", { class: "tool-page-head", style: { display: "flex", alignItems: "center", gap: "10px" } },
-      App.h("button", { class: "btn sm", onclick: () => App.navigate("tools") }, "← 返回工具箱"),
+      topLevel ? null : App.h("button", { class: "btn sm", onclick: () => App.navigate("tools") }, "← 返回工具箱"),
       App.h("div", { class: "tool-item-icon", html: App.icon(t.icon, 22) }),
       App.h("div", { style: { minWidth: "0" } },
         App.h("h2", { style: { margin: 0, fontSize: "17px" } }, t.title),
         App.h("div", { class: "sub", style: { margin: 0 } }, t.desc)),
       spacer(),
-      starBtn(t.id),
+      topLevel ? null : starBtn(t.id),
     );
-    return App.h("div", null, head, App.h("div", { class: "tool-page" }, buildBody()));
+    return App.h("div", { class: "tool-shell" }, head,
+      App.h("div", { class: "tool-page" }, buildBody()));
   }
 
   /* ================= 1 时间戳转换 ================= */
@@ -898,6 +902,1358 @@
     );
   }
 
+  /* ================= Wi-Fi 密码查看 ================= */
+  function buildWifi() {
+    const list = App.h("div", { class: "list", style: { maxHeight: "420px", overflowY: "auto" } });
+    const status = App.h("span", { class: "hint", style: { marginLeft: "auto" } });
+    async function showPwd(name, detail, btn) {
+      if (!detail.dataset.loaded) {
+        btn.disabled = true;
+        const r = await App.tryCall("tool_wifi_password", name);
+        btn.disabled = false;
+        if (!r.ok) { App.toast(r.err, "error"); return; }
+        detail.dataset.loaded = "1";
+        const pwd = r.data.has_pwd ? r.data.password : "（开放网络或未保存密码）";
+        /* v5.2：复制/隐藏同处密码行，保持水平 */
+        detail.replaceChildren(
+          App.h("div", { class: "row", style: { margin: "0", flexWrap: "nowrap" } },
+            r.data.auth ? App.h("span", { class: "tag accent", style: { flex: "none" } }, r.data.auth) : null,
+            App.h("span", {
+              class: "mono", style: {
+                flex: "1", minWidth: "0", wordBreak: "break-all",
+                userSelect: "all",
+                color: r.data.has_pwd ? "var(--text)" : "var(--muted)",
+              },
+            }, pwd),
+            r.data.has_pwd ? App.h("button", { class: "btn xs", style: { flex: "none" }, onclick: () => {
+              App.copyText(pwd).then(() => App.toast("密码已复制", "ok"));
+            } }, "复制") : null,
+            App.h("button", { class: "btn xs", style: { flex: "none" }, onclick: () => {
+              detail.style.display = "none";
+              btn.style.display = "";
+            } }, "隐藏"),
+          ),
+        );
+      }
+      detail.style.display = "";
+      btn.style.display = "none";   /* 展开时右侧按钮让位，避免与「隐藏」错位 */
+    }
+    async function refresh() {
+      list.innerHTML = "";
+      status.textContent = "读取中…";
+      const r = await App.tryCall("tool_wifi_list");
+      if (!r.ok) {
+        status.textContent = "";
+        list.appendChild(App.h("div", { class: "empty" }, r.err));
+        return;
+      }
+      status.textContent = `已保存 ${r.data.count} 个网络`;
+      if (!r.data.names.length) {
+        list.appendChild(App.h("div", { class: "empty" },
+          "本机没有已保存的 WLAN 网络\n（或没有无线网卡）"));
+        return;
+      }
+      for (const name of r.data.names) {
+        const detail = App.h("div", { style: { display: "none", marginTop: "6px" } });
+        const btn = App.h("button", {
+          class: "btn sm", style: { flex: "none" },
+          onclick: () => showPwd(name, detail, btn),
+        }, "显示密码");
+        list.appendChild(App.h("div", { class: "list-item" },
+          App.h("span", { class: "li-main", style: { display: "flex", flexDirection: "column", gap: "4px" } },
+            App.h("div", { class: "li-title" }, name),
+            detail),
+          btn,
+        ));
+      }
+    }
+    refresh();
+    return pane(
+      App.h("p", { class: "hint", style: { margin: "0 0 6px" } },
+        "列出本机曾连接并保存的 Wi-Fi 网络；「显示密码」读取本机 netsh 存储的明文密钥（仅本机数据，不联网）。"),
+      actions(App.h("button", { class: "btn", onclick: refresh }, "刷新列表"), spacer(), status),
+      list,
+    );
+  }
+
+  /* ================= 硬件信息 ================= */
+  function buildHardware() {
+    /* 通用 pane 容器：懒加载 + 加载占位 + 失败重试（UI 规范 §8.3/§8.4） */
+    function makePane(loader) {
+      const box = App.h("div", { style: { minHeight: "140px" } });
+      const state2 = { loaded: false, loading: false };
+      async function load(force) {
+        if (state2.loading || (state2.loaded && !force)) return;
+        state2.loading = true;
+        box.replaceChildren(App.h("div", { class: "empty" }, "正在读取硬件信息…"));
+        const r = await App.tryCall(loader.api);
+        state2.loading = false;
+        if (!r.ok) {
+          box.replaceChildren(
+            App.h("div", { class: "empty" }, "读取失败：" + (r.err || "未知错误")),
+            App.h("div", { style: { textAlign: "center", marginTop: "8px" } },
+              App.h("button", { class: "btn sm", onclick: () => load(true) }, "重试")));
+          return;
+        }
+        state2.loaded = true;
+        box.replaceChildren(...loader.render(r.data));
+      }
+      const el = App.h("div", null, box);
+      return { el, load, box };
+    }
+
+    function propRow(key, val, mono) {
+      if (val == null || val === "") val = "—";
+      return App.h("div", { class: "prop-row" },
+        App.h("span", { class: "prop-key" }, key),
+        App.h("span", { class: "prop-val" + (mono ? " mono" : "") }, String(val)));
+    }
+    /* 使用率条（file 状态栏同款进度条样式） */
+    function usageBar(label, pct, right) {
+      const color = pct > 90 ? "var(--danger)" : pct > 75 ? "var(--warn)" : "var(--accent)";
+      return App.h("div", { class: "row", style: { margin: "0 0 6px", flexWrap: "nowrap" } },
+        App.h("span", { class: "field-label", style: { width: "56px", flex: "none" } }, label),
+        App.h("div", {
+          style: {
+            flex: "1", height: "8px", borderRadius: "4px", overflow: "hidden",
+            background: "var(--card2)",
+          },
+        }, App.h("div", {
+          style: {
+            height: "100%", width: Math.max(2, Math.min(100, pct || 0)) + "%",
+            background: color, transition: "width .3s",
+          },
+        })),
+        App.h("span", { class: "hint mono", style: { width: right || "56px", flex: "none", textAlign: "right" } },
+          (pct != null ? pct : "—") + "%"),
+      );
+    }
+
+    /* --- 概览 --- */
+    let liveTimer = null;
+    let lastLiveKey = "";
+    function paneOverview() {
+      const liveBox = App.h("div", { style: { marginBottom: "10px" } });
+      const infoBox = App.h("div", null, App.h("div", { class: "empty" }, "正在读取硬件信息…"));
+      const p = makePane({
+        api: "tool_hw_summary",
+        render: (d) => {
+          const rows = [
+            ["电脑", [d.vendor, d.model].filter(Boolean).join(" ") || d.computer],
+            ["主机名", d.computer],
+            ["系统", d.sys ? `${d.sys}（Build ${d.build}）` : ""],
+            ["开机时长", d.uptime_h != null ? d.uptime_h + " 小时" : ""],
+            ["CPU", d.cpu ? `${d.cpu}（${d.cpu_cores}核/${d.cpu_threads}线程 · ${d.cpu_ghz}GHz）` : ""],
+            ["内存", d.mem_gb != null ? `${d.mem_gb} GB（${d.mem_bars} 条插槽）` : ""],
+            ["显卡", (d.gpus || []).join(" · ")],
+            ["磁盘", d.disk_total_tb != null ? `${d.disk_total_tb} TB` : ""],
+            ["分区容量", d.ld_total_gb != null
+              ? `已用 ${d.ld_used_gb} / ${d.ld_total_gb} GB` : ""],
+          ];
+          return [App.h("div", { class: "card", style: { padding: "12px 14px" } },
+            rows.map(([k, v]) => propRow(k, v))),
+          ];
+        },
+      });
+      async function pollLive() {
+        clearTimeout(liveTimer);
+        liveTimer = setTimeout(async () => {
+          /* 页面非活动时不请求（节能），保留轮询节拍 */
+          if (document.querySelector(".page.active#page-tool-sysinfo")) {
+            const r = await App.tryCall("tool_hw_live");
+            if (r.ok) {
+              const d = r.data;
+              const key = JSON.stringify(d);
+              if (key !== lastLiveKey) {   /* 快照比对（UI 规范 §9.1） */
+                lastLiveKey = key;
+                const items = [
+                  usageBar("CPU", d.cpu),
+                  usageBar("内存", d.mem_pct,
+                    `${d.mem_used_gb || 0} / ${d.mem_total_gb || 0}G`),
+                ];
+                for (const dk of d.disks || []) {
+                  items.push(usageBar("盘" + (dk.drive || "").replace(":", ""), dk.pct));
+                }
+                liveBox.replaceChildren(
+                  App.h("div", { class: "card", style: { padding: "12px 14px", marginBottom: "10px" } },
+                    App.h("div", { class: "card-title", style: { fontSize: "13px", marginBottom: "8px" } }, "实时状态"),
+                    ...items));
+              }
+            }
+          }
+          pollLive();
+        }, 10000);
+      }
+      return {
+        el: App.h("div", null, liveBox, infoBox, p.el),
+        load: async () => { await p.load(); pollLive(); },
+      };
+    }
+
+    /* --- 硬件明细 --- */
+    function paneDetail() {
+      const p = makePane({
+        api: "tool_hw_detail",
+        render: (d) => {
+          const cards = [];
+          const cpu = d.cpu || {};
+          cards.push(App.h("div", { class: "card", style: { padding: "12px 14px", marginBottom: "10px" } },
+            App.h("div", { class: "card-title" }, "CPU"),
+            propRow("型号", cpu.name),
+            propRow("核心/线程", cpu.cores != null ? `${cpu.cores} 核 / ${cpu.threads} 线程` : ""),
+            propRow("基准频率", cpu.base_ghz != null ? cpu.base_ghz + " GHz" : "", true),
+            propRow("L2 缓存", cpu.cache_l2 ? (cpu.cache_l2 / 1024).toFixed(1) + " MB" : "", true),
+            propRow("L3 缓存", cpu.cache_l3 ? (cpu.cache_l3 / 1024).toFixed(1) + " MB" : "", true),
+            propRow("插槽", cpu.socket)));
+          const mems = d.mems || [];
+          cards.push(App.h("div", { class: "card", style: { padding: "12px 14px", marginBottom: "10px" } },
+            App.h("div", { class: "card-title" }, `内存（${mems.length} 条）`),
+            ...(mems.length ? mems.map((m, i) => App.h("div", null,
+              propRow(`插槽 ${m.slot || i + 1}`,
+                `${m.gb} GB ${m.type}${m.speed ? " · " + m.speed + "MHz" : ""}${m.mfr ? " · " + m.mfr : ""}`)))
+              : [propRow("内存条", "未读取到（部分台式机/虚拟机不暴露）")])));
+          cards.push(App.h("div", { class: "card", style: { padding: "12px 14px", marginBottom: "10px" } },
+            App.h("div", { class: "card-title" }, "显卡"),
+            ...(d.gpus || []).map((g) => App.h("div", null,
+              propRow(g.name, [
+                g.ram_gb != null && g.ram_gb > 0 ? `显存约 ${g.ram_gb} GB` : "",
+                g.driver ? "驱动 " + g.driver : "",
+                g.driver_date || "",
+                g.mode || "",
+              ].filter(Boolean).join(" · "))),
+              ),
+            ));
+          cards.push(App.h("div", { class: "card", style: { padding: "12px 14px" } },
+            App.h("div", { class: "card-title" }, "主板与 BIOS"),
+            propRow("主板", [d.board.mfr, d.board.product].filter(Boolean).join(" ")),
+            propRow("BIOS", [d.bios.mfr, d.bios.ver].filter(Boolean).join(" "), true),
+            propRow("BIOS 日期", d.bios.date, true)));
+          return cards;
+        },
+      });
+      return { el: p.el, load: () => p.load() };
+    }
+
+    /* --- 存储 --- */
+    function paneDisks() {
+      const p = makePane({
+        api: "tool_hw_disks",
+        render: (d) => {
+          const cards = [];
+          cards.push(App.h("div", { class: "card", style: { padding: "12px 14px", marginBottom: "10px" } },
+            App.h("div", { class: "card-title" }, `物理磁盘（${(d.drives || []).length}）`),
+            ...(d.drives || []).map((x, i) => App.h("div", null,
+              propRow(`磁盘 ${i}`,
+                [x.model, x.media, x.size_gb != null ? x.size_gb + " GB" : "", x.iface]
+                  .filter(Boolean).join(" · ")),
+              x.serial ? propRow("序列号", x.serial, true) : null))));
+          cards.push(App.h("div", { class: "card", style: { padding: "12px 14px" } },
+            App.h("div", { class: "card-title" }, "分区使用率"),
+            ...(d.parts || []).map((pt) => {
+              const fmtG = (n) => n != null ? (n / (1 << 30)).toFixed(1) + " GB" : "—";
+              return App.h("div", { style: { marginBottom: "6px" } },
+                App.h("div", { class: "row", style: { margin: "0 0 3px", flexWrap: "nowrap" } },
+                  App.h("span", { class: "li-title", style: { fontWeight: "600" } },
+                    pt.drive + (pt.label ? " " + pt.label : "")),
+                  App.h("span", { class: "hint", style: { marginLeft: "auto" } },
+                    `${pt.fs || "—"} · 已用 ${pt.pct}% · 剩余 ${fmtG(pt.free)} / ${fmtG(pt.total)}`)),
+                usageBar("用量", pt.pct));
+            })));
+          return cards;
+        },
+      });
+      return { el: p.el, load: () => p.load() };
+    }
+
+    /* --- 网络 --- */
+    function paneNet() {
+      const p = makePane({
+        api: "tool_hw_network",
+        render: (d) => {
+          const adapters = d.adapters || [];
+          if (!adapters.length) {
+            return [App.h("div", { class: "empty" }, "未读取到物理网卡")];
+          }
+          return [App.h("div", { class: "card", style: { padding: "12px 14px" } },
+            App.h("div", { class: "card-title" }, `物理网卡（${adapters.length}）`),
+            ...adapters.map((a) => App.h("div", {
+              class: "list-item", style: { flexDirection: "column", alignItems: "stretch", gap: "3px" } },
+              App.h("div", { class: "row", style: { margin: "0", flexWrap: "nowrap" } },
+                a.netok ? App.statusTag("已连接", "ok", "check") : App.statusTag("未连接"),
+                App.h("span", { class: "li-title", style: { marginLeft: "6px", fontWeight: "600" } },
+                  a.name || "(未命名)"),
+                App.h("span", { class: "hint", style: { marginLeft: "auto" } },
+                  a.speed ? (a.speed / 1e9).toFixed(1) + " Gbps" : "—")),
+              App.h("div", { class: "hint mono", style: { fontSize: "11px", wordBreak: "break-all" } },
+                a.desc || ""),
+              App.h("div", { class: "hint mono", style: { fontSize: "11px" } },
+                ["MAC " + (a.mac || "—"),
+                 a.ips.length ? "IP " + a.ips.join(" / ") : "",
+                 a.gw.length ? "网关 " + a.gw.join(" / ") : ""]
+                  .filter(Boolean).join(" · ")))),
+          )];
+        },
+      });
+      return { el: p.el, load: () => p.load() };
+    }
+
+    const panes = [paneOverview(), paneDetail(), paneDisks(), paneNet()];
+    const nav = App.subnav([
+      { label: "概览", el: panes[0].el },
+      { label: "硬件明细", el: panes[1].el },
+      { label: "存储", el: panes[2].el },
+      { label: "网络", el: panes[3].el },
+    ], {
+      onSwitch: (i) => panes[i].load(),   /* 懒加载：首次激活才查询 */
+    });
+    const wrap = App.h("div", null,
+      App.h("p", { class: "hint", style: { margin: "0 0 6px" } },
+        "Windows 原生 CIM/WMI 只读查询，无需管理员权限；温度等不可靠传感器不提供。"),
+      nav);
+    nav.panes.forEach((p2) => wrap.appendChild(p2));
+    panes[0].load();   /* 首签立即加载 */
+    return wrap;
+  }
+
+  /* ================= 系统优化 ================= */
+  function buildOptimize() {
+    const sel = new Set();       // 勾选待应用
+    const refs2 = {};
+    let items = [];              // opt_tweaks 返回
+
+    const applyBtn = App.h("button", {
+      class: "btn primary", onclick: async function () {
+        if (this._busy) return;
+        if (!sel.size) { App.toast("请先勾选优化项", "warn"); return; }
+        const high = [...sel].filter((id) =>
+          (items.find((x) => x.id === id) || {}).risk === "high");
+        if (high.length && !(await App.confirm(
+          "包含高风险项", "所选含高风险项：\n" +
+          high.map((id) => "· " + (items.find((x) => x.id === id) || {}).name)
+            .join("\n") + "\n\n确定继续？"))) return;
+        this._busy = true; this.disabled = true;
+        const old = this.textContent; this.textContent = "应用中…";
+        try {
+          const r = await App.tryCall("opt_apply", [...sel]);
+          if (!r.ok) { App.toast(r.err, "error"); return; }
+          refs2.prog.style.display = "flex";
+          refs2.progText.textContent = "应用中…";
+        } finally {
+          this._busy = false; this.disabled = false; this.textContent = old;
+        }
+      },
+    }, "应用所选");
+
+    const revertBtn = App.h("button", {
+      class: "btn", onclick: async function () {
+        if (this._busy) return;
+        if (!(await App.confirm("还原全部",
+          "将按快照还原本工具执行过的全部修改，确定继续？"))) return;
+        this._busy = true; this.disabled = true;
+        try { await App.tryCall("opt_revert"); }
+        finally { this._busy = false; this.disabled = false; }
+      },
+    }, "还原全部");
+
+    const presetSel = App.h("select", { class: "input", style: { width: "auto", flex: "none" } },
+      App.h("option", { value: "" }, "预设…"),
+      App.h("option", { value: "lite" }, "轻量（仅低风险）"),
+      App.h("option", { value: "recommended" }, "推荐（低+中风险）"),
+      App.h("option", { value: "deep" }, "深度（含谨慎项）"));
+    presetSel.addEventListener("change", async () => {
+      const k = presetSel.value;
+      if (!k) return;
+      const r = await App.tryCall("opt_preset", k);
+      if (!r.ok) { App.toast(r.err, "error"); return; }
+      sel.clear();
+      r.data.ids.forEach((id) => sel.add(id));
+      refresh();
+      App.toast(`已按预设勾选 ${r.data.ids.length} 项，请检查后点「应用所选」`, "ok", 5000);
+      presetSel.value = "";
+    });
+
+    const progBar = App.h("div", {
+      style: {
+        flex: "1", height: "6px", borderRadius: "3px", overflow: "hidden",
+        background: "var(--card2)", display: "none",
+      },
+    }, App.h("div", {
+      style: { height: "100%", width: "0%", background: "var(--accent)", transition: "width .2s" },
+    }));
+    const progText = App.h("span", { class: "hint", style: { maxWidth: "200px" } });
+
+    async function refresh() {
+      refs2.list.innerHTML = "";
+      refs2.list.appendChild(App.h("div", { class: "empty" }, "正在读取优化项状态…"));
+      const r = await App.tryCall("opt_tweaks");
+      refs2.list.innerHTML = "";
+      if (!r.ok) {
+        refs2.list.appendChild(App.h("div", { class: "empty" }, r.err));
+        return;
+      }
+      items = r.data.items;
+      refs2.adminTip.style.display = r.data.admin ? "none" : "";
+      const byGroup = {};
+      items.forEach((it) => {
+        (byGroup[it.group] = byGroup[it.group] || []).push(it);
+      });
+      for (const [g, name] of Object.entries(r.data.groups)) {
+        const list = byGroup[g] || [];
+        if (!list.length) continue;
+        const body = App.h("div", { style: { display: "flex", flexDirection: "column", gap: "4px" } });
+        for (const it of list) {
+          const chk = App.h("input", {
+            type: "checkbox",
+            onchange: (e) => {
+              if (e.target.checked) sel.add(it.id); else sel.delete(it.id);
+              applyBtn.textContent = `应用所选（${sel.size}）`;
+            },
+          });
+          if (sel.has(it.id)) chk.checked = true;
+          body.appendChild(App.h("div", { class: "prop-row" },
+            chk,
+            App.h("span", { class: "prop-val" },
+              App.h("span", { style: { fontWeight: "500" } }, it.name),
+              it.risk !== "low" ? App.h("span", {
+                class: "tag " + (it.risk === "high" ? "danger" : "warn"),
+                style: { marginLeft: "6px" },
+                title: "风险等级",
+              }, it.risk === "high" ? "高" : "中") : null,
+              App.h("div", { class: "hint", style: { fontSize: "11.5px", marginTop: "2px" } }, it.desc),
+            ),
+            it.on === true ? App.statusTag("已生效", "ok", "check")
+              : it.admin && !r.data.admin ? App.statusTag("需管理员", "warn")
+              : App.statusTag("未优化"),
+            App.h("button", {
+              class: "btn xs", style: { flex: "none" }, title: "还原此项",
+              disabled: it.on !== true,
+              onclick: async function () {
+                if (this._busy) return;
+                this._busy = true; this.disabled = true;
+                try {
+                  const rr = await App.tryCall("opt_revert_one", it.id);
+                  if (!rr.ok) { App.toast(rr.err, "error"); return; }
+                  App.toast("已还原此项", "ok");
+                  refresh();
+                } finally { this._busy = false; }
+              },
+            }, "还原"),
+          ));
+        }
+        refs2.list.appendChild(App.sec(`${name}（${list.length}）`, [body], { open: g === "privacy" }));
+      }
+    }
+
+    function onOptProgress(d) {
+      if (d.stage !== "run") return;
+      refs2.prog.style.display = "flex";
+      progBar.style.width = d.total ? Math.round(d.done * 100 / d.total) + "%" : "5%";
+      progText.textContent = `${d.done}/${d.total} · ${d.name || ""}`;
+    }
+    function onOptDone(d) {
+      if (d.tag) return;   // 全量已装应用等带 tag 的事件由各自处理器消化，防串扰
+      progBar.style.width = "100%";
+      setTimeout(() => { refs2.prog.style.display = "none"; progBar.style.width = "0%"; }, 1200);
+      if (!d.ok) { App.toast(d.err || "操作失败", "error", 6000); }
+      else {
+        const fails = (d.results || []).filter((x) => !x.ok);
+        if (fails.length) {
+          App.toast(`完成，${fails.length} 项失败：` +
+            fails.map((x) => x.err).join("；"), "warn", 8000);
+        } else {
+          App.toast("操作完成", "ok");
+        }
+      }
+      sel.clear();
+      applyBtn.textContent = "应用所选";
+      refresh();
+    }
+
+    const p1 = App.h("div", null,
+      App.h("div", { class: "card", style: { padding: "10px 14px" } },
+        App.h("div", { class: "row", style: { flexWrap: "wrap" } },
+          presetSel, applyBtn, revertBtn,
+          App.h("button", { class: "btn sm", onclick: async function () {
+            const r = await App.tryCall("opt_export_cfg", [...sel]);
+            if (!r.ok) { App.toast(r.err, "error"); return; }
+            App.toast(`配置已导出（${r.data.count} 项）：\n${r.data.path}`, "ok", 8000);
+          } }, "导出配置"),
+          App.h("button", { class: "btn sm", onclick: async function () {
+            const r = await App.tryCall("opt_import_pick");
+            if (!r.ok) { if (r.err !== "未选择文件。") App.toast(r.err, "error"); return; }
+            sel.clear();
+            r.data.ids.forEach((id) => sel.add(id));
+            refresh();
+            App.toast(`已导入 ${r.data.ids.length} 项勾选，请检查后应用`, "ok", 5000);
+          } }, "导入配置"),
+          refs2.adminTip = App.h("span", {
+            class: "hint", style: { color: "var(--warn)", display: "none" },
+          }, "⚠ 未以管理员运行：管理员项将不可应用（可点右下角「提权重启」）"),
+        ),
+        App.h("div", { class: "row", style: { margin: "8px 0 0" } },
+          refs2.prog = App.h("div", {
+            style: { display: "none", alignItems: "center", gap: "8px", flex: "1" },
+          }, progBar, progText),
+        ),
+      ),
+      refs2.list = App.h("div", { style: { marginTop: "10px" } }),
+    );
+
+    /* --- 页签 2：更新策略 --- */
+    const updBox = App.h("div", { class: "list" });
+    let updMode = null;
+    async function refreshUpdate() {
+      updBox.innerHTML = "";
+      updBox.appendChild(App.h("div", { class: "empty" }, "正在读取…"));
+      const r = await App.tryCall("opt_update_get");
+      updBox.innerHTML = "";
+      if (!r.ok) { updBox.appendChild(App.h("div", { class: "empty" }, r.err)); return; }
+      updMode = r.data.mode;
+      const modes = [
+        ["default", "默认（全量更新）", "正常接收全部 Windows 更新"],
+        ["security", "仅安全更新", "推迟功能更新 365 天，只收安全补丁"],
+        ["paused", "暂停更新", "完全停止自动更新（有安全风险，自行斟酌）"],
+      ];
+      for (const [m, title, desc] of modes) {
+        const active = updMode === m;
+        updBox.appendChild(App.h("div", {
+          class: "list-item" + (active ? " selected" : ""), style: { cursor: "pointer" },
+          onclick: async function () {
+            if (!(await App.confirm("切换更新策略",
+              `将切换为「${title}」，需要管理员权限（UAC）。继续？`))) return;
+            const rr = await App.tryCall("opt_update_set", m);
+            if (!rr.ok) { App.toast(rr.err, "error", 6000); return; }
+            App.toast("更新策略已切换", "ok");
+            refreshUpdate();
+          },
+        },
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title" }, title,
+              active ? App.h("span", { class: "tag accent", style: { marginLeft: "8px" } }, "当前") : null),
+            App.h("div", { class: "li-sub" }, desc)),
+        ));
+      }
+    }
+    const p2 = App.h("div", null,
+      App.h("div", { class: "card", style: { padding: "10px 14px" } },
+        App.h("div", { class: "row" },
+          App.h("button", { class: "btn sm", onclick: refreshUpdate }, "刷新"),
+          App.h("span", { class: "hint" }, "策略对齐 WinUtil：功能更新可推迟，安全补丁持续接收")),
+        App.h("div", { style: { marginTop: "8px" } }, updBox)));
+
+    /* --- 页签 3：垃圾清理 --- */
+    const cleanBox = App.h("div", { class: "list" });
+    const cleanSel = new Set();
+    async function cleanScan() {
+      cleanBox.innerHTML = "";
+      cleanBox.appendChild(App.h("div", { class: "empty" }, "正在扫描…"));
+      const r = await App.tryCall("opt_clean_scan");
+      cleanBox.innerHTML = "";
+      if (!r.ok) { cleanBox.appendChild(App.h("div", { class: "empty" }, r.err)); return; }
+      for (const it of r.data.items) {
+        const chk = App.h("input", {
+          type: "checkbox", checked: cleanSel.has(it.id),
+          onchange: (e) => {
+            if (e.target.checked) cleanSel.add(it.id); else cleanSel.delete(it.id);
+          },
+        });
+        cleanBox.appendChild(App.h("div", { class: "list-item" },
+          chk,
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title" }, it.name,
+              it.admin ? App.h("span", { class: "hint", style: { marginLeft: "6px" } }, "（需管理员）") : null)),
+          App.h("span", { class: "hint mono" },
+            it.size != null ? App.fmtBytes(it.size) : "—"),
+        ));
+      }
+    }
+    const p3 = App.h("div", { class: "card", style: { padding: "10px 14px" } },
+      App.h("div", { class: "row" },
+        App.h("button", { class: "btn sm", onclick: cleanScan }, "扫描大小"),
+        App.h("button", {
+          class: "btn primary", onclick: async function () {
+            if (this._busy) return;
+            if (!cleanSel.size) { App.toast("请先勾选清理项（先扫描）", "warn"); return; }
+            if (cleanSel.has("recycle") && !(await App.confirm(
+              "包含回收站清理", "回收站可能包含你还需要的数据，确定一并清空？"))) {
+              cleanSel.delete("recycle");
+            }
+            if (!(await App.confirm("开始清理", `将清理 ${cleanSel.size} 项，无法撤销，继续？`))) return;
+            this._busy = true; this.disabled = true;
+            try { await App.tryCall("opt_clean_run", [...cleanSel]); }
+            finally { this._busy = false; this.disabled = false; }
+          },
+        }, "开始清理"),
+        App.h("span", { class: "hint" }, "均为可再生缓存；回收站请先确认")),
+      App.h("div", { style: { marginTop: "8px" } }, cleanBox));
+
+    /* --- 页签 4：系统修复 --- */
+    const fixes = [
+      ["sfc", "系统文件检查（SFC）", "扫描并修复受保护的系统文件。耗时 5-15 分钟。"],
+      ["dism", "组件存储修复（DISM）", "修复组件存储，SFC 无法修复时先跑这个。耗时 10-20 分钟。"],
+      ["netstack", "网络栈重置", "重置 Winsock 与 TCP/IP，完成后需重启电脑。"],
+      ["wu-reset", "Windows 更新组件重置", "停止更新服务并清空更新缓存后重启服务。"],
+      ["winget", "WinGet 源修复", "重置并更新 WinGet 包源。"],
+    ];
+    const fixLog = App.h("div", { class: "log-box", style: { maxHeight: "160px", marginTop: "8px" } }, "修复输出…");
+    const logFix = App.makeLog(fixLog);
+    const p4 = App.h("div", null,
+      ...fixes.map(([id, name, desc]) => App.h("div", { class: "card", style: { padding: "10px 14px", marginBottom: "10px" } },
+        App.h("div", { class: "card-title" }, name),
+        App.h("div", { class: "hint" }, desc),
+        App.h("div", { class: "row", style: { marginTop: "6px" } },
+          App.h("button", {
+            class: "btn", onclick: async function () {
+              if (this._busy) return;
+              if (!(await App.confirm("运行修复",
+                `「${name}」需要管理员权限（UAC），耗时可能较长。开始？`))) return;
+              this._busy = true; this.disabled = true;
+              const old = this.textContent; this.textContent = "运行中…";
+              try {
+                const r = await App.tryCall("opt_fix_run", id);
+                if (!r.ok) { App.toast(r.err, "error", 8000); return; }
+                logFix(r.data.output || "（无输出）");
+                App.toast(`${name} 已完成`, "ok");
+              } finally {
+                this._busy = false; this.disabled = false; this.textContent = old;
+              }
+            },
+          }, "运行")))),
+      fixLog);
+
+    /* opt_progress/opt_done 在 paneWinget 之后统一注册（此处勿重复订阅，
+       否则同一事件会触发两次处理器——历史遗留双份 toast 已修） */
+
+    /* --- 页签：应用管理（UWP + 可选功能 + 旧版能力，Winhance 三合一） --- */
+    const uwpBox = App.h("div", { class: "list", style: { maxHeight: "300px", overflowY: "auto" } });
+    const uwpRemovedBox = App.h("div", { class: "list", style: { marginTop: "6px" } });
+    const uwpSearch = App.h("input", {
+      class: "input", placeholder: "搜索应用…", style: { width: "180px", flex: "none" },
+      oninput: () => renderUwp(),
+    });
+    const uwpSel = new Set();
+    let uwpAdmin = false;
+    function renderUwp() {
+      uwpBox.innerHTML = "";
+      const kw = (uwpSearch.value || "").trim().toLowerCase();
+      const list = (buildOptimize._uwpInstalled || []).filter((x) =>
+        !kw || x.name.toLowerCase().includes(kw));
+      if (!list.length) {
+        uwpBox.appendChild(App.h("div", { class: "empty" },
+          kw ? "无匹配应用" : "未读取到 UWP 应用"));
+        return;
+      }
+      for (const it of list) {
+        const chk = App.h("input", {
+          type: "checkbox", disabled: !uwpAdmin,
+          onchange: (e) => {
+            if (e.target.checked) uwpSel.add(it.name); else uwpSel.delete(it.name);
+            uwpRemoveBtn.textContent = `卸载所选（${uwpSel.size}）`;
+          },
+        });
+        if (uwpSel.has(it.name)) chk.checked = true;
+        uwpBox.appendChild(App.h("div", { class: "list-item" },
+          chk,
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title" }, it.name),
+            App.h("div", { class: "li-sub mono", style: { fontSize: "10.5px" } }, it.full || "")),
+        ));
+      }
+    }
+    const uwpRemoveBtn = App.h("button", {
+      class: "btn sm danger", onclick: async function () {
+        if (this._busy) return;
+        if (!uwpAdmin) { App.toast("卸载 UWP 应用需要以管理员身份运行", "warn"); return; }
+        if (!uwpSel.size) { App.toast("请先勾选要卸载的应用", "warn"); return; }
+        if (!(await App.confirm("卸载 UWP 应用",
+          `将卸载所选 ${uwpSel.size} 个应用（已记录位置，可恢复）。确定继续？`))) return;
+        this._busy = true; this.disabled = true;
+        try {
+          const r = await App.tryCall("opt_uwp_remove", [...uwpSel]);
+          if (!r.ok) { App.toast(r.err, "error"); return; }
+          refs2.prog.style.display = "flex";
+        } finally { this._busy = false; this.disabled = false; }
+      },
+    }, "卸载所选");
+    async function uwpRefresh() {
+      uwpBox.innerHTML = "";
+      uwpBox.appendChild(App.h("div", { class: "empty" }, "正在读取 UWP 应用…"));
+      uwpRemovedBox.innerHTML = "";
+      const r = await App.tryCall("opt_uwp_list");
+      if (!r.ok) { uwpBox.innerHTML = ""; uwpBox.appendChild(App.h("div", { class: "empty" }, r.err)); return; }
+      buildOptimize._uwpInstalled = r.data.installed;
+      uwpAdmin = r.data.admin;
+      uwpSel.clear();
+      uwpRemoveBtn.textContent = "卸载所选";
+      paintUwpAdmin();
+      renderUwp();
+      uwpRemovedBox.innerHTML = "";
+      const removed = r.data.removed || [];
+      if (!removed.length) {
+        uwpRemovedBox.appendChild(App.h("div", { class: "hint" }, "本工具卸载过的应用会出现在这里，可一键恢复。"));
+        return;
+      }
+      for (const it of removed) {
+        uwpRemovedBox.appendChild(App.h("div", { class: "prop-row" },
+          App.h("span", { class: "prop-val" }, it.name),
+          App.h("button", { class: "btn xs", onclick: async function () {
+            if (this._busy) return;
+            this._busy = true; this.disabled = true;
+            try {
+              const rr = await App.tryCall("opt_uwp_restore", it.name);
+              if (!rr.ok) { App.toast(rr.err, "error", 8000); return; }
+              App.toast("已恢复，刷新列表可见", "ok");
+              uwpRefresh();
+            } finally { this._busy = false; }
+          } }, "恢复")));
+      }
+    }
+    /* 可选功能 / 旧版能力 */
+    const featBox = App.h("div", { class: "list", style: { maxHeight: "300px", overflowY: "auto" } });
+    async function featRefresh() {
+      featBox.innerHTML = "";
+      featBox.appendChild(App.h("div", { class: "empty" }, "正在读取可选功能…（需管理员）"));
+      const r = await App.tryCall("opt_features_list");
+      featBox.innerHTML = "";
+      if (!r.ok) { featBox.appendChild(App.h("div", { class: "empty" }, r.err)); return; }
+      for (const f of r.data.features) {
+        const enabled = f.state === "Enabled";
+        featBox.appendChild(App.h("div", { class: "list-item" },
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title mono", style: { fontSize: "12px" } }, f.name)),
+          enabled ? App.statusTag("已启用", "ok") : App.statusTag("已禁用"),
+          App.h("button", {
+            class: "btn xs", style: { flex: "none" },
+            onclick: async function () {
+              if (this._busy) return;
+              if (!(await App.confirm("切换可选功能",
+                `${enabled ? "禁用" : "启用"}「${f.name}」？（UAC，部分功能需重启）`))) return;
+              this._busy = true; this.disabled = true;
+              try {
+                const rr = await App.tryCall("opt_feature_set", f.name, !enabled);
+                if (!rr.ok) { App.toast(rr.err, "error", 8000); return; }
+                App.toast("已切换（如需重启会另行提示）", "ok");
+                featRefresh();
+              } finally { this._busy = false; }
+            },
+          }, enabled ? "禁用" : "启用")));
+      }
+    }
+    const capBox = App.h("div", { class: "list", style: { maxHeight: "300px", overflowY: "auto" } });
+    async function capRefresh() {
+      capBox.innerHTML = "";
+      capBox.appendChild(App.h("div", { class: "empty" }, "正在读取旧版能力…（需管理员）"));
+      const r = await App.tryCall("opt_caps_list");
+      capBox.innerHTML = "";
+      if (!r.ok) { capBox.appendChild(App.h("div", { class: "empty" }, r.err)); return; }
+      for (const c of r.data.caps) {
+        const installed = c.state === "Installed";
+        capBox.appendChild(App.h("div", { class: "list-item" },
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title mono", style: { fontSize: "12px" } }, c.name)),
+          installed ? App.statusTag("已安装", "ok") : App.statusTag("未安装"),
+          App.h("button", {
+            class: "btn xs", style: { flex: "none" },
+            onclick: async function () {
+              if (this._busy) return;
+              if (!(await App.confirm("切换旧版能力",
+                `${installed ? "移除" : "添加"}「${c.name}」？（UAC，可能联网下载）`))) return;
+              this._busy = true; this.disabled = true;
+              try {
+                const rr = await App.tryCall("opt_cap_set", c.name, !installed);
+                if (!rr.ok) { App.toast(rr.err, "error", 8000); return; }
+                App.toast("已切换", "ok");
+                capRefresh();
+              } finally { this._busy = false; }
+            },
+          }, installed ? "移除" : "添加")));
+      }
+    }
+    /* 三区块纵向布局（UWP / 可选功能 / 旧版能力） */
+    /* v5.4：提权重启按钮统一收在右下角状态栏，这里仅保留权限状态提示 */
+    const uwpAdminRow = App.h("div", { class: "row", style: { marginBottom: "10px" } });
+    function paintUwpAdmin() {
+      uwpAdminRow.innerHTML = "";
+      if (uwpAdmin) {
+        uwpAdminRow.appendChild(App.h("span", { class: "tag ok" }, "已以管理员身份运行"));
+        return;
+      }
+      uwpAdminRow.appendChild(App.h("span", { class: "hint", style: { color: "var(--warn)" } },
+        "⚠ 未以管理员运行：卸载 UWP / 切换可选功能与旧版能力需要管理员权限（点右下角「提权重启」一次性提权）"));
+    }
+    /* 打开页签即显示权限状态（轻量 app_info，无需先点「刷新」；uwpRefresh 后以实际值覆盖） */
+    App.tryCall("app_info").then((r) => {
+      if (r.ok) { uwpAdmin = !!(r.data && r.data.admin); paintUwpAdmin(); }
+    });
+
+    /* --- 全量已装应用（v5.4 架构级复刻一期：注册表 + UWP 双源检测工厂） --- */
+    const appsSel = new Set();          // 勾选的 listkey（跨页保持）
+    let appsPage = 1, appsTotal = 0, appsKwTimer = null;
+    const appsBox = App.h("div", { class: "list", style: { maxHeight: "320px", overflowY: "auto" } },
+      App.h("div", { class: "empty" }, "尚未扫描\n点击「扫描本机应用」读取注册表与 UWP 已装应用"));
+    const appsSearch = App.h("input", {
+      class: "input grow-in", placeholder: "搜索名称 / 发布者…",
+      oninput: () => {
+        clearTimeout(appsKwTimer);
+        appsKwTimer = setTimeout(() => loadAppsPage(1, false), 300);
+      },
+    });
+    const appsSrcSel = App.h("select", {
+      class: "input", style: { width: "auto", flex: "none" },
+      onchange: () => loadAppsPage(1, false),
+    },
+      App.h("option", { value: "" }, "全部来源"),
+      App.h("option", { value: "registry" }, "注册表程序"),
+      App.h("option", { value: "uwp" }, "UWP 应用"));
+    const appsUninstallBtn = App.h("button", {
+      class: "btn sm danger", onclick: async function () {
+        if (this._busy) return;
+        if (!appsSel.size) { App.toast("请先勾选要卸载的应用", "warn"); return; }
+        const names = [...appsSel].map((k) => appsNameById.get(k)).filter(Boolean);
+        const show = names.slice(0, 3).join("、") + (names.length > 3 ? " 等" : "");
+        if (!(await App.confirm("批量静默卸载",
+          `将静默卸载所选 ${appsSel.size} 个应用：${show}。\n` +
+          "仅支持静默卸载的应用可执行；操作会弹出一次 UAC 授权。确定继续？"))) return;
+        this._busy = true; this.disabled = true;
+        const old = this.textContent; this.textContent = "卸载中…";
+        try {
+          const r = await App.tryCall("opt_apps_uninstall", [...appsSel]);
+          if (!r.ok) { App.toast(r.err, "error", 6000); return; }
+          refs2.prog.style.display = "flex";
+        } finally { this._busy = false; this.disabled = false; this.textContent = old; }
+      },
+    }, "卸载所选");
+    async function loadAppsPage(page, append) {
+      if (!append) { appsPage = 1; }
+      else { appsPage = page; }
+      if (!append) {
+        appsBox.innerHTML = "";
+        appsBox.appendChild(App.h("div", { class: "empty" }, "正在读取…"));
+      } else {
+        const more = appsBox.querySelector(".apps-more");
+        if (more) more.remove();
+      }
+      const r = await App.tryCall("opt_apps_list", appsSrcSel.value,
+        appsSearch.value.trim(), appsPage, 100);
+      if (!append) appsBox.innerHTML = "";
+      if (!r.ok) {
+        appsBox.innerHTML = "";
+        appsBox.appendChild(App.h("div", { class: "empty" }, r.err));
+        return;
+      }
+      appsTotal = r.data.total;
+      for (const it of r.data.items) {
+        appsNameById.set(it.listkey, it.name);
+        appsBox.appendChild(appsRow(it));
+      }
+      const shown = (appsPage - 1) * (r.data.page_size || 100) + r.data.items.length;
+      if (!r.data.items.length && !append) {
+        appsBox.appendChild(App.h("div", { class: "empty" },
+          appsSearch.value.trim() ? "无匹配应用" : "未读取到已装应用"));
+      }
+      if (shown < appsTotal) {
+        appsBox.appendChild(App.h("div", { class: "apps-more", style: { padding: "8px", textAlign: "center" } },
+          App.h("button", {
+            class: "btn sm", onclick: () => loadAppsPage(appsPage + 1, true),
+          }, `加载更多（已显示 ${shown} / ${appsTotal}）`)));
+      }
+      appsUninstallBtn.textContent =
+        appsSel.size ? `卸载所选（${appsSel.size}）` : "卸载所选";
+    }
+    function appsRow(it) {
+      const checked = appsSel.has(it.listkey);
+      const sizeTxt = it.size_kb > 0 ? App.fmtBytes(it.size_kb * 1024) : "—";
+      const srcTag = it.source === "uwp" ? "UWP"
+        : (it.scope === "user" ? "用户级" : "系统级");
+      return App.h("div", { class: "list-item" },
+        App.h("input", {
+          type: "checkbox",
+          disabled: !it.quiet_possible,
+          checked,
+          onchange: (e) => {
+            if (e.target.checked) appsSel.add(it.listkey);
+            else appsSel.delete(it.listkey);
+            appsUninstallBtn.textContent =
+              appsSel.size ? `卸载所选（${appsSel.size}）` : "卸载所选";
+          },
+        }),
+        App.h("span", { class: "li-main" },
+          App.h("div", { class: "li-title" }, it.name),
+          App.h("div", { class: "li-sub" },
+            [it.version, it.publisher].filter(Boolean).join(" · ") || "—")),
+        it.source === "uwp" ? App.h("span", { class: "tag accent" }, "UWP")
+          : App.h("span", { class: "tag" }, srcTag),
+        it.quiet_possible ? null
+          : App.h("span", { class: "tag warn", title: "无静默卸载串，需手动卸载" }, "无静默"),
+        App.h("span", { class: "hint mono", style: { width: "72px", textAlign: "right", flex: "none" } }, sizeTxt),
+      );
+    }
+    const appsNameById = new Map();    // listkey → name（confirm 文案用）
+    function onAppsDone(d) {
+      if (d.tag !== "apps") return;    // 只消化全量已装应用事件（更新事件见 onAppsUpdDone）
+      refs2.prog.style.display = "none";
+      if (!d.ok) { App.toast(d.err || "操作失败", "error", 6000); return; }
+      if (typeof d.count === "number") {         // 扫描完成
+        App.toast(`扫描完成：共 ${d.count} 个已装应用`, "ok");
+        loadAppsPage(1, false);
+        loadAppsRemoved();
+        return;
+      }
+      if (Array.isArray(d.results)) {            // 卸载完成
+        const fails = d.results.filter((x) => !x.ok);
+        appsSel.clear();
+        appsUninstallBtn.textContent = "卸载所选";
+        if (fails.length) {
+          App.toast(`卸载完成，${fails.length} 项失败：` +
+            fails.map((x) => `${x.name}（${x.err}）`).join("；"), "warn", 8000);
+        } else {
+          App.toast(`已卸载 ${d.results.length} 个应用`, "ok");
+        }
+        loadAppsPage(1, false);
+        loadAppsRemoved();
+      }
+    }
+    /* 可升级应用（winget，v5.4 二期：UniGetUI 更新检测思想的最小子集） */
+    const upSel = new Set();
+    const upBox = App.h("div", { class: "list", style: { maxHeight: "260px", overflowY: "auto" } },
+      App.h("div", { class: "empty" }, "尚未检查\n点击「检查升级」读取 winget 可升级列表"));
+    const upUpgradeBtn = App.h("button", {
+      class: "btn sm primary", onclick: async function () {
+        if (this._busy) return;
+        if (!upSel.size) { App.toast("请先勾选要升级的应用", "warn"); return; }
+        if (!(await App.confirm("批量静默升级",
+          `将通过 winget 静默升级所选 ${upSel.size} 个应用（联网下载，耗时视网速），继续？`))) return;
+        this._busy = true; this.disabled = true;
+        const old = this.textContent; this.textContent = "升级中…";
+        refs2.prog.style.display = "flex";
+        try {
+          const r = await App.tryCall("opt_apps_upgrade", [...upSel]);
+          if (!r.ok) { App.toast(r.err, "error", 6000); return; }
+        } finally { this._busy = false; this.disabled = false; this.textContent = old; }
+      },
+    }, "升级所选");
+    function renderUpgrades(rows) {
+      upBox.innerHTML = "";
+      if (!rows.length) {
+        upBox.appendChild(App.h("div", { class: "empty" }, "全部应用已是最新"));
+        upUpgradeBtn.disabled = true;
+        return;
+      }
+      upUpgradeBtn.disabled = false;
+      for (const it of rows) {
+        upBox.appendChild(App.h("div", { class: "list-item" },
+          App.h("input", {
+            type: "checkbox",
+            checked: upSel.has(it.id),
+            onchange: (e) => {
+              if (e.target.checked) upSel.add(it.id); else upSel.delete(it.id);
+              upUpgradeBtn.textContent =
+                upSel.size ? `升级所选（${upSel.size}）` : "升级所选";
+            },
+          }),
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title" }, it.name),
+            App.h("div", { class: "li-sub mono" }, it.id)),
+          App.h("span", { class: "hint mono" },
+            `${it.version} → ${it.available}`),
+        ));
+      }
+      upUpgradeBtn.textContent =
+        upSel.size ? `升级所选（${upSel.size}）` : "升级所选";
+    }
+    function onAppsUpdDone(d) {
+      if (d.tag !== "apps_updates") return;
+      refs2.prog.style.display = "none";
+      if (!d.ok) { App.toast(d.err || "操作失败", "error", 6000); return; }
+      if (Array.isArray(d.rows)) {               // 升级检查完成
+        upSel.clear();
+        renderUpgrades(d.rows);
+        App.toast(d.rows.length ? `发现 ${d.rows.length} 个可升级应用` : "全部应用已是最新", "ok");
+        return;
+      }
+      if (Array.isArray(d.results)) {            // 批量升级完成
+        const fails = d.results.filter((x) => !x.ok);
+        upSel.clear();
+        if (fails.length) {
+          App.toast(`升级完成，${fails.length} 项失败：` +
+            fails.map((x) => `${x.id}（${x.err}）`).join("；"), "warn", 8000);
+        } else {
+          App.toast(`已升级 ${d.results.length} 个应用`, "ok");
+        }
+        upCheckBtn._busy = false;   // 允许再次检查
+      }
+    }
+    const upCheckBtn = App.h("button", {
+      class: "btn primary", onclick: async function () {
+        if (this._busy) return;
+        this._busy = true; this.disabled = true;
+        const old = this.textContent; this.textContent = "检查中…";
+        refs2.prog.style.display = "flex";
+        try {
+          const r = await App.tryCall("opt_apps_updates");
+          if (!r.ok) { App.toast(r.err, "error"); return; }
+        } finally {
+          this._busy = false; this.disabled = false; this.textContent = old;
+        }
+      },
+    }, "检查升级");
+    /* 已卸载记录（快照留痕，一期仅展示） */
+    const appsRemovedBox = App.h("div", { class: "list", style: { maxHeight: "160px", overflowY: "auto" } });
+    async function loadAppsRemoved() {
+      appsRemovedBox.innerHTML = "";
+      const r = await App.tryCall("opt_apps_removed_list");
+      if (!r.ok) return;
+      const removed = r.data || [];
+      if (!removed.length) {
+        appsRemovedBox.appendChild(App.h("div", { class: "hint" },
+          "本工具静默卸载过的应用会记录在这里。"));
+        return;
+      }
+      for (const it of removed) {
+        appsRemovedBox.appendChild(App.h("div", { class: "list-item" },
+          App.h("span", { class: "li-main" },
+            App.h("div", { class: "li-title" }, it.name || it.listkey),
+            App.h("div", { class: "li-sub" },
+              it.ts ? new Date(it.ts * 1000).toLocaleString() : "")),
+        ));
+      }
+    }
+    const appsScanBtn = App.h("button", {
+      class: "btn primary", onclick: async function () {
+        if (this._busy) return;
+        this._busy = true; this.disabled = true;
+        const old = this.textContent; this.textContent = "扫描中…";
+        refs2.prog.style.display = "flex";
+        try {
+          const r = await App.tryCall("opt_apps_scan");
+          if (!r.ok) { App.toast(r.err, "error"); return; }
+        } finally {
+          this._busy = false; this.disabled = false; this.textContent = old;
+        }
+      },
+    }, "扫描本机应用");
+    loadAppsRemoved();   // 挂载即加载已卸载记录（折叠区内）
+    const paneAppsMgr = App.h("div", null,
+      uwpAdminRow,
+      /* 全量已装应用（注册表 + UWP 双源检测工厂） */
+      App.h("div", { class: "card", style: { padding: "10px 14px" } },
+        App.h("div", { class: "card-title" }, "全量已装应用"),
+        App.h("div", { class: "row", style: { flexWrap: "wrap" } },
+          appsScanBtn,
+          App.h("span", { class: "hint" },
+            "注册表 + UWP + Scoop/Chocolatey 多源检测（检测到对应 CLI 时自动启用）；" +
+            "勾选后可批量静默卸载")),
+        App.h("div", { class: "row", style: { marginTop: "8px" } },
+          appsSearch, appsSrcSel, appsUninstallBtn),
+        App.h("div", { style: { marginTop: "8px" } }, appsBox)),
+      /* v5.4 二期：可升级（winget）+ 已卸载记录（默认折叠） */
+      App.sec("可升级应用（winget，检查需联网）",
+        [App.h("div", { class: "row", style: { marginBottom: "6px" } },
+          upCheckBtn, upUpgradeBtn,
+          App.h("span", { class: "hint" }, "静默升级，可多选批量执行")),
+         upBox], { open: false }),
+      App.sec("已卸载记录", [appsRemovedBox], { open: false }),
+      App.h("div", { class: "card", style: { padding: "10px 14px" } },
+        App.h("div", { class: "card-title" }, "UWP 应用"),
+        App.h("div", { class: "row" }, uwpSearch, uwpRemoveBtn,
+          App.h("button", { class: "btn sm", onclick: uwpRefresh }, "刷新")),
+        App.h("div", { style: { marginTop: "8px" } }, uwpBox),
+        App.h("div", { style: { marginTop: "6px" } }, uwpRemovedBox)),
+      App.h("div", { class: "card", style: { padding: "10px 14px", marginTop: "10px" } },
+        App.h("div", { class: "row" },
+          App.h("div", { class: "card-title", style: { margin: "0" } }, "Windows 可选功能"),
+          App.h("span", { class: "grow" }),
+          App.h("button", { class: "btn sm", onclick: featRefresh }, "刷新")),
+        App.h("div", { style: { marginTop: "8px" } }, featBox)),
+      App.h("div", { class: "card", style: { padding: "10px 14px", marginTop: "10px" } },
+        App.h("div", { class: "row" },
+          App.h("div", { class: "card-title", style: { margin: "0" } }, "旧版能力（按需组件）"),
+          App.h("span", { class: "grow" }),
+          App.h("button", { class: "btn sm", onclick: capRefresh }, "刷新")),
+        App.h("div", { style: { marginTop: "8px" } }, capBox)));
+
+    /* --- 页签：软件安装（winget） --- */
+    const wingetBox = App.h("div");
+    const wingetSel = new Set();
+    async function wingetRefresh() {
+      wingetBox.innerHTML = "";
+      const r = await App.tryCall("opt_winget_catalog");
+      if (!r.ok) { wingetBox.appendChild(App.h("div", { class: "empty" }, r.err)); return; }
+      if (!r.data.available) {
+        wingetBox.appendChild(App.h("div", { class: "empty" },
+          "未检测到 winget\n请先安装微软「应用安装程序」（Microsoft Store）"));
+        return;
+      }
+      for (const [cat, apps] of Object.entries(r.data.catalog)) {
+        const row = App.h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "6px" } });
+        for (const app of apps) {
+          row.appendChild(App.h("label", { class: "chk" },
+            App.h("input", {
+              type: "checkbox",
+              onchange: (e) => {
+                if (e.target.checked) wingetSel.add(app.id); else wingetSel.delete(app.id);
+                wingetInstallBtn.textContent = `安装所选（${wingetSel.size}）`;
+              },
+            }), " " + app.name));
+        }
+        wingetBox.appendChild(App.h("div", { class: "card-title", style: { fontSize: "13px", margin: "10px 0 0" } }, cat));
+        wingetBox.appendChild(row);
+      }
+    }
+    const wingetInstallBtn = App.h("button", {
+      class: "btn primary", onclick: async function () {
+        if (this._busy) return;
+        if (!wingetSel.size) { App.toast("请先勾选要安装的软件", "warn"); return; }
+        if (!(await App.confirm("安装软件",
+          `将通过 winget 静默安装 ${wingetSel.size} 个软件（联网下载，耗时视网速），继续？`))) return;
+        this._busy = true; this.disabled = true;
+        try { await App.tryCall("opt_winget_install", [...wingetSel]); }
+        finally { this._busy = false; this.disabled = false; }
+      },
+    }, "安装所选");
+    const paneWinget = App.h("div", { class: "card", style: { padding: "10px 14px" } },
+      App.h("div", { class: "row" }, wingetInstallBtn,
+        App.h("button", { class: "btn sm", onclick: wingetRefresh }, "刷新列表"),
+        App.h("span", { class: "hint" }, "通过 winget 官方源静默安装，无捆绑")),
+      App.h("div", { style: { marginTop: "6px" } }, wingetBox));
+
+    App.on("opt_progress", onOptProgress);
+    App.on("opt_done", onOptDone);
+    App.on("opt_done", onAppsDone);       // 全量已装应用：按 tag==="apps" 消化
+    App.on("opt_done", onAppsUpdDone);    // 可升级应用：按 tag==="apps_updates" 消化
+
+    const nav = App.subnav([
+      { label: "系统优化", el: p1 },
+      { label: "应用管理", el: paneAppsMgr },
+      { label: "软件安装", el: paneWinget },
+      { label: "更新策略", el: p2 },
+      { label: "垃圾清理", el: p3 },
+      { label: "系统修复", el: p4 },
+    ]);
+    refresh();
+    /* App.subnav 只返回页签条，pane 必须经 nav.panes 手动挂载（此前遗漏导致
+       「系统优化」页签下 6 个页签全部无内容） */
+    const wrap = App.h("div", null,
+      App.h("p", { class: "hint", style: { margin: "0 0 6px" } },
+        "优化清单移植自 WinUtil（MIT）并经 Winhance 源码交叉验证；全部项可按快照还原。不做激活/Defender 禁用/强卸 Edge。"),
+      nav);
+    nav.panes.forEach((p) => wrap.appendChild(p));
+    return wrap;
+  }
+
+  /* ================= 无人值守安装应答生成器（autounattend.xml） ================= */
+  function buildUnattend() {
+    /* 微软官方 unattend schema；优化项联动：勾选的 Tweaks 以 FirstLogonCommands
+       reg add / sc config 方式写入（Winhance 思想：装完即已优化）。 */
+    const f = {};
+    f.lang = App.h("select", { class: "input", style: { flex: "1" } },
+      ["zh-CN", "en-US", "ja-JP", "ko-KR", "de-DE", "fr-FR"].map((l) => App.h("option", { value: l }, l)));
+    f.tz = App.h("select", { class: "input", style: { flex: "1" } },
+      ["China Standard Time", "UTC", "W. Europe Standard Time", "Eastern Standard Time",
+        "Pacific Standard Time", "Tokyo Standard Time", "Korea Standard Time"]
+        .map((t) => App.h("option", { value: t }, t)));
+    f.user = App.h("input", { class: "input", value: "user", style: { flex: "1" } });
+    f.pwd = App.h("input", { class: "input", type: "password", style: { flex: "1" }, placeholder: "留空 = 无密码" });
+    f.autologon = App.h("input", { type: "checkbox" });
+    f.computer = App.h("input", { class: "input", placeholder: "留空随机", style: { flex: "1" } });
+    f.key = App.h("input", { class: "input mono", placeholder: "产品密钥（留空 = 使用镜像内置）", style: { flex: "1" } });
+    f.disk = App.h("input", { type: "checkbox" });
+    f.skipprivacy = App.h("input", { type: "checkbox", checked: true });
+    f.bypass = App.h("input", { type: "checkbox", checked: true });
+
+    /* 优化项联动：勾选写入 FirstLogonCommands */
+    const optBox = App.h("div", { style: { display: "flex", flexDirection: "column", gap: "4px", maxHeight: "260px", overflowY: "auto" } });
+    const optSel = new Set();
+    let optItems = [];
+    async function loadOpts() {
+      optBox.innerHTML = "";
+      optBox.appendChild(App.h("div", { class: "empty" }, "正在读取优化清单…"));
+      const r = await App.tryCall("opt_tweaks");
+      optBox.innerHTML = "";
+      if (!r.ok) { optBox.appendChild(App.h("div", { class: "empty" }, r.err)); return; }
+      optItems = r.data.items.filter((x) => (x.registry || []).length || (x.services || []).length);
+      const groups = {};
+      optItems.forEach((x) => (groups[x.group_name] = groups[x.group_name] || []).push(x));
+      for (const [g, list] of Object.entries(groups)) {
+        optBox.appendChild(App.h("div", { class: "hint", style: { marginTop: "6px" } }, g));
+        for (const it of list) {
+          const chk = App.h("input", {
+            type: "checkbox",
+            onchange: (e) => {
+              if (e.target.checked) optSel.add(it.id); else optSel.delete(it.id);
+              optCount.textContent = `将写入 ${optSel.size} 项优化`;
+            },
+          });
+          optBox.appendChild(App.h("label", { class: "chk" }, chk, " " + it.name));
+        }
+      }
+      optCount.textContent = "将写入 0 项优化";
+    }
+    const optCount = App.h("span", { class: "hint", style: { marginLeft: "auto" } });
+
+    const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+    function buildXml() {
+      const lang = f.lang.value, tz = f.tz.value;
+      const user = (f.user.value || "user").trim();
+      const pwd = f.pwd.value;
+      const cmds = [];
+      /* 优化项 → FirstLogonCommands（registry 型 reg add；services 型 sc config） */
+      for (const id of optSel) {
+        const t = optItems.find((x) => x.id === id);
+        if (!t) continue;
+        for (const r of t.registry || []) {
+          const hive = r.path.replace(/^HKLM:/i, "HKLM").replace(/^HKCU:/i, "HKCU").replace(/\\/g, "\\");
+          const type = r.kind === "DWord" ? "REG_DWORD"
+            : r.kind === "QWord" ? "REG_QWORD" : "REG_SZ";
+          cmds.push({ cmd: `reg add "${hive}" /v "${r.name}" /t ${type} /d ${r.value} /f`,
+                      desc: "优化: " + t.name });
+        }
+        for (const s of t.services || []) {
+          const map = { Disabled: "disabled", Manual: "demand", Automatic: "auto" };
+          cmds.push({ cmd: `sc config "${s.name}" start= ${map[s.startup] || "demand"}`,
+                      desc: "服务优化: " + t.name });
+        }
+      }
+      if (f.disk.checked) {
+        cmds.push({ cmd: "powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+                    desc: "高性能电源计划" });
+      }
+      let xml = '<?xml version="1.0" encoding="utf-8"?>\n'
+        + '<unattend xmlns="urn:schemas-microsoft-com:unattend">\n';
+      /* windowsPE：语言 + 分区 + EULA/密钥 */
+      xml += '  <settings pass="windowsPE">\n'
+        + '    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">\n'
+        + '      <SetupUILanguage><UILanguage>' + esc(lang) + '</UILanguage></SetupUILanguage>\n'
+        + '      <InputLocale>' + esc(lang) + '</InputLocale>\n'
+        + '      <SystemLocale>' + esc(lang) + '</SystemLocale>\n'
+        + '      <UILanguage>' + esc(lang) + '</UILanguage>\n'
+        + '      <UserLocale>' + esc(lang) + '</UserLocale>\n'
+        + '    </component>\n'
+        + '    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">\n'
+        + '      <UserData><AcceptEula>true</AcceptEula>'
+        + (f.key.value.trim() ? '<ProductKey><Key>' + esc(f.key.value.trim()) + '</Key></ProductKey>' : '')
+        + '</UserData>\n';
+      if (f.disk.checked) {
+        xml += '      <DiskConfiguration>\n'
+          + '        <Disk wcm:action="add">\n'
+          + '          <DiskID>0</DiskID><WillWipeDisk>true</WillWipeDisk>\n'
+          + '          <CreatePartitions>\n'
+          + '            <CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>300</Size></CreatePartition>\n'
+          + '            <CreatePartition wcm:action="add"><Order>2</Order><Type>MSR</Type><Size>16</Size></CreatePartition>\n'
+          + '            <CreatePartition wcm:action="add"><Order>3</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>\n'
+          + '          </CreatePartitions>\n'
+          + '          <ModifyPartitions>\n'
+          + '            <ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>System</Label></ModifyPartition>\n'
+          + '            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter></ModifyPartition>\n'
+          + '          </ModifyPartitions>\n'
+          + '        </Disk>\n'
+          + '      </DiskConfiguration>\n'
+          + '      <ImageInstall><OSImage><InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo></OSImage></ImageInstall>\n';
+      }
+      xml += '    </component>\n  </settings>\n';
+      /* specialize：计算机名 */
+      xml += '  <settings pass="specialize">\n'
+        + '    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">\n'
+        + (f.computer.value.trim() ? '      <ComputerName>' + esc(f.computer.value.trim()) + '</ComputerName>\n' : '')
+        + '      <TimeZone>' + esc(tz) + '</TimeZone>\n'
+        + '    </component>\n  </settings>\n';
+      /* oobeSystem：OOBE / 用户 / 自动登录 / FirstLogonCommands */
+      xml += '  <settings pass="oobeSystem">\n'
+        + '    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">\n'
+        + '      <InputLocale>' + esc(lang) + '</InputLocale>\n'
+        + '      <SystemLocale>' + esc(lang) + '</SystemLocale>\n'
+        + '      <UILanguage>' + esc(lang) + '</UILanguage>\n'
+        + '      <UserLocale>' + esc(lang) + '</UserLocale>\n'
+        + '    </component>\n'
+        + '    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">\n'
+        + '      <OOBE>\n'
+        + '        <HideEULAPage>true</HideEULAPage>\n'
+        + '        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>\n'
+        + '        <HideOnlineAccountScreens>' + (f.bypass.checked ? "true" : "false") + '</HideOnlineAccountScreens>\n'
+        + '        <HideWirelessSetupInOOBE>false</HideWirelessSetupInOOBE>\n'
+        + '        <ProtectYourPC>' + (f.skipprivacy.checked ? "3" : "1") + '</ProtectYourPC>\n'
+        + '      </OOBE>\n'
+        + '      <UserAccounts><LocalAccounts><LocalAccount wcm:action="add">\n'
+        + '        <Name>' + esc(user) + '</Name>\n'
+        + '        <Group>Administrators</Group>\n'
+        + '        <Password><Value>' + esc(pwd) + '</Value><PlainText>true</PlainText></Password>\n'
+        + '      </LocalAccount></LocalAccounts></UserAccounts>\n'
+        + (f.autologon.checked
+          ? '      <AutoLogon><Enabled>true</Enabled><LogonCount>1</LogonCount><Username>' + esc(user) + '</Username><Password><Value>' + esc(pwd) + '</Value><PlainText>true</PlainText></Password></AutoLogon>\n'
+          : '')
+        + '      <TimeZone>' + esc(tz) + '</TimeZone>\n'
+        + '      <FirstLogonCommands>\n';
+      cmds.forEach((c, i) => {
+        xml += '        <SynchronousCommand wcm:action="add">\n'
+          + '          <Order>' + (i + 1) + '</Order>\n'
+          + '          <CommandLine>' + esc(c.cmd) + '</CommandLine>\n'
+          + '          <Description>' + esc(c.desc) + '</Description>\n'
+          + '        </SynchronousCommand>\n';
+      });
+      xml += '      </FirstLogonCommands>\n'
+        + '    </component>\n  </settings>\n</unattend>\n';
+      return { xml, cmdCount: cmds.length };
+    }
+
+    function download() {
+      const { xml, cmdCount } = buildXml();
+      const a = App.h("a", {
+        href: URL.createObjectURL(new Blob([xml], { type: "application/xml" })),
+        download: "autounattend.xml",
+      });
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 200);
+      App.toast(`autounattend.xml 已生成（${cmdCount} 条首次登录命令）`, "ok", 6000);
+    }
+
+    loadOpts();
+    return App.h("div", null,
+      App.h("p", { class: "hint", style: { margin: "0 0 8px" } },
+        "生成微软官方 autounattend.xml：放进 Windows 安装 U 盘根目录即可无人值守安装（语言/账户/OOBE 全自动，装完自动应用勾选的优化）。"),
+      App.h("div", { class: "card", style: { padding: "10px 14px" } },
+        App.h("div", { class: "card-title" }, "区域与账户"),
+        App.h("div", { class: "prop-row" }, App.h("span", { class: "prop-key" }, "语言"), f.lang),
+        App.h("div", { class: "prop-row" }, App.h("span", { class: "prop-key" }, "时区"), f.tz),
+        App.h("div", { class: "prop-row" }, App.h("span", { class: "prop-key" }, "用户名"), f.user),
+        App.h("div", { class: "prop-row" }, App.h("span", { class: "prop-key" }, "密码"), f.pwd),
+        App.h("div", { class: "prop-row" },
+          App.h("span", { class: "prop-key" }, "自动登录"),
+          App.h("label", { class: "chk" }, f.autologon, " 装机完成自动登录一次")),
+        App.h("div", { class: "prop-row" }, App.h("span", { class: "prop-key" }, "计算机名"), f.computer),
+        App.h("div", { class: "prop-row" }, App.h("span", { class: "prop-key" }, "产品密钥"), f.key),
+        App.h("div", { class: "prop-row" },
+          App.h("span", { class: "prop-key" }, "OOBE"),
+          App.h("label", { class: "chk" }, f.skipprivacy, " 跳过隐私问题（推荐）"),
+          App.h("label", { class: "chk" }, f.bypass, " 强制本地账户（屏蔽联网账户页）")),
+      ),
+      App.h("div", { class: "card", style: { padding: "10px 14px", marginTop: "10px" } },
+        App.h("div", { class: "card-title" }, "磁盘分区（危险）"),
+        App.h("label", { class: "chk" }, f.disk,
+          " 自动清空磁盘 0 并分区（GPT/UEFI 标准三分区）——⚠ 会删除磁盘 0 全部数据！"),
+        App.h("div", { class: "hint", style: { marginTop: "4px" } },
+          "不勾选则安装时手动分区。")),
+      App.h("div", { class: "card", style: { padding: "10px 14px", marginTop: "10px" } },
+        App.h("div", { class: "row" },
+          App.h("div", { class: "card-title", style: { margin: "0" } }, "预装系统优化"),
+          optCount),
+        App.h("div", { class: "hint" },
+          "勾选的优化将以首次登录命令方式在装完系统后自动应用（注册表与服务型）。"),
+        App.h("div", { style: { marginTop: "6px" } }, optBox)),
+      App.h("div", { class: "row", style: { marginTop: "10px" } },
+        App.h("button", {
+          class: "btn primary", onclick: async () => {
+            if (!(f.user.value || "").trim()) { App.toast("请填写用户名", "warn"); return; }
+            if (f.disk.checked && !(await App.confirm(
+              "⚠ 已勾选自动分区", "生成的应答文件会清空磁盘 0 的全部数据！确定继续？"))) return;
+            download();
+          },
+        }, "下载 autounattend.xml"),
+        App.h("span", { class: "hint" }, "将文件放到安装 U 盘根目录")));
+  }
+
   /* ================= 11 DNS 切换 ================= */
   function buildDns() {
     const adapterSel = App.h("select", { class: "input" });
@@ -1055,26 +2411,8 @@
     );
   }
 
-  /* ================= 14 图片 OCR ================= */
-  function buildOcrFile() {
-    const out = App.toolOut({ saveName: "OCR 识别" });
-    async function run() {
-      App.toast("请在对话框中选择图片文件…", "info", 4000);
-      const r = await App.tryCall("tool_ocr_file");
-      if (!r.ok) { App.toast(r.err, "error", 7000); return; }
-      const d = r.data || {};
-      if (d.empty || !(d.text || "").trim()) { App.toast("未识别到文字", "info", 4000); return; }
-      out.set([{ label: "识别全文（" + (d.path || "图片") + "）", text: d.text,
-                 ts: Math.floor(Date.now() / 1000) }]);
-      App.ocrResultModal(d);
-    }
-    return pane(
-      App.h("p", { class: "hint", style: { margin: "0 0 6px" } },
-        "基于 Windows.Media.Ocr 系统引擎，本地离线识别图片中的文字；结果可复制 / 另存。"),
-      actions(App.h("button", { class: "btn sm primary", onclick: run }, "选择图片识别")),
-      out.el,
-    );
-  }
+  /* ================= 14 图片 OCR =================
+     v5.1：OCR 已独立为一级页面（pages/ocr.js），工具箱不再收录。 */
 
   /* ================= 15 调色板提取 ================= */
   function buildPalette() {
@@ -1126,7 +2464,7 @@
   /* ================= 目录数据 ================= */
   const IMAGE_TOOLS = [
     { id: "editor", title: "图片编辑", desc: "滤镜、标注、裁剪、文字等图像编辑功能", icon: "image", section: "屏幕与图像", kw: "图片 ps 编辑 滤镜" },
-    { id: "cliphist", title: "剪贴板历史", desc: "查看和管理剪贴板历史记录", icon: "clipboard", section: "屏幕与图像", kw: "剪贴板 粘贴 历史" },
+    /* v5.2：剪贴板历史升级为一级页面（互联与协作组），不再从工具箱进入 */
     { id: "combine", title: "图片合并", desc: "垂直/水平/网格拼接多张图片", icon: "copy", section: "屏幕与图像", kw: "拼接 合并 长图" },
     { id: "split", title: "图片分割", desc: "将图片按行列拆分为多个子图", icon: "scissors", section: "屏幕与图像", kw: "切割 拆分 九宫格" },
     { id: "batch", title: "批量处理", desc: "批量调整大小、特效、格式转换", icon: "layers", section: "屏幕与图像", kw: "批量 缩放 转格式" },
@@ -1142,15 +2480,21 @@
     { id: "tool-qr", title: "二维码", desc: "文本 / 链接生成二维码", icon: "qrcode", section: "生成与安全", kw: "二维码 qr 扫码 链接", build: buildQr },
     { id: "tool-regex", title: "正则测试", desc: "正则匹配与高亮预览", icon: "search", section: "生成与安全", kw: "正则 表达式 regex 匹配", build: buildRegex },
     { id: "tool-color", title: "屏幕取色", desc: "全屏放大镜取色并复制 HEX", icon: "cursor", section: "屏幕与图像", kw: "取色 颜色 hex 放大镜", build: buildColor },
-    { id: "tool-ocr", title: "文字识别", desc: "本地 OCR 识别图片文字", icon: "filetext", section: "屏幕与图像", kw: "ocr 文字识别 图片", build: buildOcrFile },
     { id: "tool-palette", title: "调色板", desc: "从图片提取主色调", icon: "palette", section: "屏幕与图像", kw: "调色板 主色 配色", build: buildPalette },
-    { id: "tool-port", title: "端口占用", desc: "查询 / 释放端口占用进程", icon: "radar", section: "系统与网络", kw: "端口 占用 进程 杀进程", build: buildPort },
-    { id: "tool-dns", title: "DNS 切换", desc: "网卡 DNS 快速切换预设", icon: "server", section: "系统与网络", kw: "dns 网卡 阿里 114", build: buildDns },
-    { id: "tool-monitor", title: "显示器信息", desc: "分辨率 / 缩放 / 多屏布局", icon: "monitor", section: "系统与网络", kw: "显示器 分辨率 dpr 缩放", build: buildMonitorInfo },
-    { id: "tool-proxy", title: "代理开关", desc: "系统代理一键开 / 关", icon: "globe", section: "系统与网络", kw: "代理 开关 v2rayn 系统代理", build: buildProxyQuickSwitch },
+    { id: "tool-port", title: "端口占用", desc: "查询 / 释放端口占用进程", icon: "radar", section: "网络工具", kw: "端口 占用 进程 杀进程", build: buildPort },
+    { id: "tool-dns", title: "DNS 切换", desc: "网卡 DNS 快速切换预设", icon: "server", section: "网络工具", kw: "dns 网卡 阿里 114", build: buildDns },
+    { id: "tool-wifi", title: "Wi-Fi 密码查看", desc: "查看本机已保存的无线网络密码", icon: "wifi", section: "网络工具", kw: "wifi 无线 密码 wlan 网络 netsh", build: buildWifi },
+    { id: "tool-proxy", title: "代理开关", desc: "系统代理一键开 / 关", icon: "globe", section: "网络工具", kw: "代理 开关 v2rayn 系统代理", build: buildProxyQuickSwitch },
   ];
-  const SECTION_ORDER = ["转换与编码", "文件与校验", "生成与安全", "屏幕与图像", "系统与网络"];
-  const SECTION_TINT = { "转换与编码": 0, "文件与校验": 1, "生成与安全": 2, "屏幕与图像": 3, "系统与网络": 4 };
+  /* v5.5：系统类工具提升为一级页面（侧栏「系统」分组），不再从工具箱进入 */
+  const SYSTEM_TOOLS = [
+    { id: "tool-optimize", title: "系统优化", desc: "隐私遥测 / 任务栏 / 服务 / 更新策略 / 垃圾清理 / 系统修复（快照可还原）", icon: "settings", kw: "优化 隐私 遥测 精简 debloat 服务 更新 清理 修复 winutil", build: buildOptimize },
+    { id: "tool-sysinfo", title: "硬件信息", desc: "CPU / 内存 / 显卡 / 磁盘 / 网卡 / 主板 全景与实时使用率", icon: "monitor", kw: "硬件 cpu 内存 显卡 磁盘 主板 bios 系统 配置 使用率", build: buildHardware },
+    { id: "tool-monitor", title: "显示器信息", desc: "分辨率 / 缩放 / 多屏布局", icon: "monitor", kw: "显示器 分辨率 dpr 缩放", build: buildMonitorInfo },
+    { id: "tool-unattend", title: "无人值守安装", desc: "生成 autounattend.xml：装机全自动并预装系统优化", icon: "filetext", kw: "autounattend 无人值守 安装 重装 应答 装机", build: buildUnattend },
+  ];
+  const SECTION_ORDER = ["转换与编码", "文件与校验", "生成与安全", "屏幕与图像", "网络工具"];
+  const SECTION_TINT = { "转换与编码": 0, "文件与校验": 1, "生成与安全": 2, "屏幕与图像": 3, "网络工具": 4 };
   const ALL_TOOLS = BUILT_IN_TOOLS.concat(IMAGE_TOOLS);
   App.TOOL_CATALOG = ALL_TOOLS;   // Ctrl+K 直达数据源
 
@@ -1170,10 +2514,18 @@
       starBtn(t.id),
     );
   }
+  /* v5.4：分类可折叠（默认折叠，会话内记忆展开状态；「清理 ⋯」式收纳减少首屏堆叠） */
+  const secOpen = new Set();
   function sectionCard(title, tools) {
-    return App.h("div", { class: "card" },
-      App.h("div", { class: "card-title" }, title),
-      App.h("div", { class: "tool-list" }, tools.map(toolRow)));
+    const el = App.sec(`${title}（${tools.length}）`,
+      [App.h("div", { class: "tool-list" }, tools.map(toolRow))],
+      { open: secOpen.has(title) });
+    el.querySelector(".sec-head").addEventListener("click", () => {
+      /* App.sec 的内部监听已先切换 collapsed 类，此处读取的是切换后的状态 */
+      if (el.classList.contains("collapsed")) secOpen.delete(title);
+      else secOpen.add(title);
+    });
+    return el;
   }
   function chip(label, t, onRemove) {
     const el = App.h("span", { class: "tool-chip", title: t.desc || t.title,
@@ -1263,7 +2615,25 @@
       hidden: true,
       icon: t.icon,
       mount(el) {
+        /* v5.3：标记为全高页面，让工具页工作区铺满内容区（最后一张结果/画布
+           卡吸收剩余高度），消除此前"顶部一个小卡 + 下方 400~670px 空白" */
+        el.classList.add("page-flex");
         el.appendChild(toolShell(t, t.build));
+      },
+      show() { /* 纯本地工具，无需刷新 */ },
+    });
+  });
+
+  /* v5.5：系统类工具注册为一级页面（侧栏「系统」分组，与「设置」同组） */
+  SYSTEM_TOOLS.forEach((t) => {
+    App.registerPage({
+      id: t.id,
+      title: t.title,
+      group: "系统",
+      icon: t.icon,
+      mount(el) {
+        el.classList.add("page-flex");
+        el.appendChild(toolShell(t, t.build, true));
       },
       show() { /* 纯本地工具，无需刷新 */ },
     });

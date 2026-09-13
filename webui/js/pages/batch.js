@@ -26,22 +26,26 @@ App.registerPage({
 var state = { files: [], operations: [], running: false };
 
 function mount(el) {
-  var toolbar = h("div", {class: "row", style: {gap: "8px", marginBottom: "12px", flexWrap: "wrap"}},
+  el.classList.add("page-flex", "canvas-page");   // v5.3：画布页铺满内容区
+  var toolbar = h("div", {class: "row", style: {gap: "8px", flexWrap: "wrap"}},
     h("button", {class: "btn sm", onclick: pickFiles}, "选择文件"),
     h("button", {class: "btn sm", onclick: pickDir}, "选择目录"),
     h("button", {class: "btn sm", onclick: addResizeOp}, "添加: 调整大小"),
     h("button", {class: "btn sm", onclick: addEffectOp}, "添加: 特效"),
     h("button", {class: "btn sm", onclick: addWatermarkOp}, "添加: 水印"),
     h("button", {class: "btn sm", onclick: addConvertOp}, "添加: 格式转换"),
-    h("span", {class: "divider"}),
+    /* v5.3：.divider 只在 #titlebar / .editor-toolbar 下有样式，这里用内联
+       复刻同一配方（此前是一个零尺寸的隐形元素） */
+    h("span", {style: {width: "1px", height: "18px", background: "var(--border)",
+      margin: "0 4px", flex: "none"}}),
     h("button", {class: "btn sm accent", onclick: startBatch}, "开始处理"),
     h("button", {class: "btn sm danger", onclick: stopBatch}, "取消")
   );
 
   var fileList = h("div", {id: "batch-files", class: "batch-file-list",
-    style: {maxHeight: "150px", overflow: "auto", marginBottom: "8px"}});
+    style: {maxHeight: "150px", overflow: "auto"}});
   var opList = h("div", {id: "batch-ops", class: "batch-op-list",
-    style: {maxHeight: "150px", overflow: "auto", marginBottom: "8px"}});
+    style: {maxHeight: "150px", overflow: "auto"}});
   var progress = h("div", {id: "batch-progress", class: "batch-progress",
     style: {display: "none"}},
     h("div", {id: "batch-progress-bar", class: "progress-bar"},
@@ -54,10 +58,16 @@ function mount(el) {
   state.opListEl = opList;
   state.progressEl = progress;
 
-  el.appendChild(toolbar);
-  el.appendChild(fileList);
-  el.appendChild(h("div", {style: {fontWeight: "bold", marginBottom: "4px"}}, "处理流水线:"));
-  el.appendChild(opList);
+  el.appendChild(h("div", {class: "page-head"},
+    h("h2", null, "批量处理"),
+    h("div", {class: "sub"}, "选文件 → 搭一条操作流水线（调整大小 / 特效 / 水印 / 格式转换）→ 一次处理完")));
+  el.appendChild(h("div", {class: "card"}, toolbar));
+  el.appendChild(h("div", {class: "card"},
+    h("div", {class: "card-title"}, "待处理文件"),
+    fileList));
+  el.appendChild(h("div", {class: "card fill"},
+    h("div", {class: "card-title"}, "处理流水线（按顺序执行）"),
+    opList));
   el.appendChild(progress);
 
   App.on("batch_progress", function(d) { updateProgress(d); });

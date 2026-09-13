@@ -41,25 +41,31 @@ class KmApi:
     def _km_edge_hit(self, direction, frac=0.0):
         """鼠标滑出本机屏幕边缘 → 按邻居表切换控制目标（T-03/T-04）。
 
-        v4.7：读 edge_switch 开关；记录出口边与沿边分数 → controller.set_entry
-        使远端光标从目标屏对侧边缘进入（避免卡在同侧边缘）。
+        v5.1b：本回调在低级鼠标钩子线程内触发，attach() 含最长 3s 网络
+        I/O——必须移入工作线程，否则全系统鼠标停顿且钩子可能被系统摘除。
         """
         if not self.cfg.data.get("km_edge_switch", True):
             return
         ip = self._km_edges.get(direction, "") or ""
         if not ip:
             return
+        threading.Thread(target=self._km_edge_switch, args=(ip, direction, frac),
+                         daemon=True, name="km-edge").start()
+
+    def _km_edge_switch(self, ip, direction, frac=0.0):
+        """边缘切换的实际执行（工作线程）。"""
         c = self._km_controller
-        if ip not in c._targets:
-            try:
+        try:
+            if ip not in c._targets:
                 c.attach(ip)
-            except Exception as e:
-                self.emit("km_log", f"边缘切换失败：{e}")
-                return
-        c.set_active(ip)
-        if not c.active:
-            c.set_control(True)
-        c.set_entry(direction, frac)
+            c.set_active(ip)
+            if not c.active:
+                c.set_control(True)
+            c.set_entry(direction, frac)
+            self.emit("km_log", f"边缘穿越（{direction}）→ 已控制 {c.peer}")
+            self._km_push_state()
+        except Exception as e:
+            self.emit("km_log", f"边缘切换失败：{e}")
 
     def _km_edge_back(self, direction, frac=0.0):
         """控制中远端光标滑回入口对侧边 → 切回本机。
@@ -164,9 +170,35 @@ class KmApi:
         return {"ok": True, "data": t.running}
 
     def km_stop_listen(self):
-        self._km_target.stop()
+        t = self._km_target
+        t.stop()
+        # 停止监听时回收本应用打开的防火墙规则（净退出）
+        if self._km_fw_open:
+            from ..core import firewall
+            ok, msg = firewall.remove(FW_PREFIX, t.port)
+            if ok:
+                self._km_fw_open = False
+                self.emit("km_log", "已回收防火墙入站规则（端口 %d）" % t.port)
+            else:
+                self.emit("km_log", "防火墙规则回收失败：%s" % ((msg or "").strip() or "未授权"))
         self._km_push_state()
         return {"ok": True, "data": True}
+
+    def _km_autostart(self):
+        """v5.1b：按 cfg 随应用自启被控端监听（不自动放防火墙，避免开机 UAC）。"""
+        try:
+            if not self.cfg.get("km_allow", True):
+                return
+            t = self._km_target
+            if t.running:
+                return
+            t.start()
+            if t.running:
+                self.emit("km_log", "被控端监听已随应用自动开启（端口 %d）。"
+                          "如需局域网连接，请到键鼠共享页放行防火墙。" % t.port)
+                self._km_push_state()
+        except Exception as e:
+            self.emit("km_log", "被控端监听自启失败：%s" % e)
 
     def km_connect(self, ip, port=None):
         try:

@@ -241,14 +241,9 @@
 
       el.appendChild(App.h("div", { class: "page-head" },
         App.h("h2", null, "键鼠共享"),
-        App.h("div", { class: "sub" }, "把本机键盘鼠标实时延伸到局域网内的另一台电脑"),
-      ));
-
-      el.appendChild(App.h("div", { class: "card" },
-        App.h("div", { class: "hint" },
-          "用一台电脑的键盘鼠标直接操作另一台：被控端点「启动监听」，控制端连接后按 Ctrl+Alt+K 开始控制（再按一次释放）。", App.h("br"),
-          "注意：控制期间本机键鼠被拦截；无法作用于管理员权限弹窗（UAC）等系统安全界面。",
-        ),
+        App.h("div", { class: "sub" },
+          "把本机键盘鼠标实时延伸到局域网内的另一台电脑；被控端点「启动监听」，控制端连接后按 Ctrl+Alt+K 开始控制（再按一次释放）。" +
+          "注意：控制期间本机键鼠被拦截；无法作用于管理员权限弹窗（UAC）等系统安全界面。"),
       ));
 
       /* 被控端 */
@@ -259,7 +254,7 @@
         onchange: (e) => { state.fw = e.target.checked; },
       });
       refs.tState = App.h("span", { class: "hint ml-auto" }, "未监听");
-      el.appendChild(App.h("div", { class: "card" },
+      const paneServer = App.h("div", { class: "card" },
         App.h("div", { class: "card-title" }, "被控端（让别的电脑控制本机）"),
         App.h("div", { class: "row" },
           refs.tListen = App.h("button", {
@@ -275,14 +270,14 @@
             refs.fwTgl, App.h("span", { class: "track" }), "放行防火墙端口"),
           refs.tState,
         ),
-      ));
+      );
 
       /* 控制端 */
       refs.devSelect = App.h("select", { class: "input", style: { minWidth: "220px" } });
       refs.ipInput = App.h("input", { class: "input", placeholder: "192.168.1.23", style: { width: "150px" } });
       refs.portInput = App.h("input", { class: "input", type: "number", min: "1", max: "65535", value: 41892, style: { width: "90px" } });
       refs.cState = App.h("span", { class: "hint ml-auto" }, "未连接");
-      el.appendChild(App.h("div", { class: "card" },
+      const paneClient = App.h("div", { class: "card" },
         App.h("div", { class: "card-title" }, "控制端（用本机键鼠控制其他电脑）"),
         App.h("div", { class: "row" },
           App.h("span", { class: "hint" }, "被控设备："), refs.devSelect,
@@ -295,7 +290,7 @@
           refs.control = App.h("button", { class: "btn", onclick: doToggleControl }, "开始控制（Ctrl+Alt+K）"),
           refs.cState,
         ),
-      ));
+      );
 
       /* 多设备与边缘穿越（T-03/04/05，v4.7 设置持久化 + 双向切回） */
       refs.targetBox = App.h("div", { class: "list" });
@@ -305,7 +300,7 @@
         class: "input", type: "number", min: "1", max: "50",
         style: { width: "80px" }, onchange: doEdgeMargin,
       });
-      el.appendChild(App.h("div", { class: "card" },
+      const paneEdge = App.h("div", { class: "card" },
         App.h("div", { class: "card-title" },
           "多设备与边缘穿越",
           App.h("span", { class: "hint", style: { marginLeft: "8px" } },
@@ -320,7 +315,16 @@
         refs.targetBox,
         App.h("div", { style: { marginTop: "10px" } },
           refs.edgeBox),
-      ));
+      );
+
+      /* v5.2 P4：页内标签「被控端 | 控制端 | 边缘与多设备」 */
+      const nav = App.subnav([
+        { label: "被控端", el: paneServer },
+        { label: "控制端", el: paneClient },
+        { label: "边缘与多设备", el: paneEdge },
+      ]);
+      el.appendChild(nav);
+      nav.panes.forEach((p) => el.appendChild(p));
 
       refs.log = App.h("div", { class: "log-box", style: { maxHeight: "110px" } }, "键鼠共享日志...");
       log = App.makeLog(refs.log);

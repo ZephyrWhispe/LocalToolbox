@@ -26,20 +26,24 @@ App.registerPage({
 var state = { path: null, info: null };
 
 function mount(el) {
-  var toolbar = h("div", {class: "row", style: {gap: "8px", marginBottom: "12px", flexWrap: "wrap"}},
+  el.classList.add("page-flex", "canvas-page");   // v5.3：画布页铺满内容区
+  var toolbar = h("div", {class: "row", style: {gap: "8px", flexWrap: "wrap"}},
     h("button", {class: "btn sm", onclick: pickFile}, "打开视频"),
     h("button", {class: "btn sm", onclick: showTrim}, "裁剪"),
     h("button", {class: "btn sm", onclick: showToGif}, "转 GIF"),
     h("button", {class: "btn sm", onclick: showExtract}, "提取帧")
   );
 
-  var infoPanel = h("div", {id: "video-info", class: "video-info",
-    style: {marginBottom: "12px"}});
+  var infoPanel = h("div", {id: "video-info", class: "video-info"});
   var player = h("div", {id: "video-player"});
 
-  el.appendChild(toolbar);
-  el.appendChild(infoPanel);
-  el.appendChild(player);
+  el.appendChild(h("div", {class: "page-head"},
+    h("h2", null, "视频编辑"),
+    h("div", {class: "sub"}, "查看视频信息，做裁剪 / 转 GIF / 提取帧（依赖 ffmpeg）")));
+  el.appendChild(h("div", {class: "card"}, toolbar));
+  el.appendChild(h("div", {class: "card fill"},
+    h("div", {class: "card-title"}, "视频信息与预览"),
+    infoPanel, player));
 
   App.on("video_trim_done", function(r) {
     if (r.ok || r.path) App.toast("裁剪完成: " + (r.path || r.data && r.data.path), "success");

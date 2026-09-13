@@ -1,6 +1,7 @@
 """工具箱桥接：哈希校验/清单校验、目录快照、列表导出、端口查询、二维码。"""
 
 import os
+import threading
 
 import webview
 
@@ -119,6 +120,57 @@ class ToolsApi:
         except Exception as e:
             return {"ok": False, "err": str(e)}
 
+    # -- Wi-Fi 密码查看（v5.2 工具箱） -----------------------------------
+    def tool_wifi_list(self):
+        try:
+            names = tools.wifi_profiles()
+            return {"ok": True, "data": {"count": len(names), "names": names}}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def tool_wifi_password(self, name):
+        try:
+            name = str(name or "").strip()
+            if not name:
+                return {"ok": False, "err": "请指定 WLAN 配置文件名。"}
+            pwd, auth = tools.wifi_password(name)
+            return {"ok": True, "data": {"name": name, "auth": auth,
+                                         "has_pwd": bool(pwd),
+                                         "password": pwd or ""}}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    # -- 硬件信息（v5.3 工具箱，CIM/WMI 只读） ----------------------------
+    def tool_hw_summary(self):
+        try:
+            return {"ok": True, "data": tools.hw_summary()}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def tool_hw_detail(self):
+        try:
+            return {"ok": True, "data": tools.hw_detail()}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def tool_hw_disks(self):
+        try:
+            return {"ok": True, "data": tools.hw_disks()}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def tool_hw_network(self):
+        try:
+            return {"ok": True, "data": tools.hw_network()}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def tool_hw_live(self):
+        try:
+            return {"ok": True, "data": tools.hw_live()}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
     # -- 二维码 ---------------------------------------------------------
     def tool_qr(self, text, size=280):
         try:
@@ -133,32 +185,134 @@ class ToolsApi:
         except Exception as e:
             return {"ok": False, "err": str(e)}
 
-    # -- OCR 图片识别（Windows.Media.Ocr） ----------------------------------
-    def tool_ocr_file(self):
-        """选择图片文件并识别文字，返回全文与逐行坐标。"""
+    # -- OCR 图片识别（v5.1：winrt / rapid / umi 三引擎 + 独立页） --------
+    def _ocr_engine(self):
+        return str(self.cfg.get("ocr_engine", "winrt") or "winrt")
+
+    def _ocr_run(self, png, source=""):
+        """统一识别：引擎分发 + 后处理，返回 processed/raw 双文本。"""
+        from ..core import ocr
+        from ..core.ocr_umi import UmiError
+        import io as _io
+        from PIL import Image
+        img = Image.open(_io.BytesIO(png))
+        engine = self._ocr_engine()
+        umi_kw = {}
+        if engine == "umi":
+            umi_kw = {"url": str(self.cfg.get("ocr_umi_url", "") or None),
+                      "exe_path": str(self.cfg.get("ocr_umi_path", "") or ""),
+                      "autostart": bool(self.cfg.get("ocr_umi_autostart", True))}
+        try:
+            out = ocr.recognize_any(img, engine=engine, umi_opts=umi_kw or None)
+        except UmiError as e:
+            return {"ok": False, "err": str(e)}
+        merge = bool(self.cfg.get("ocr_merge_lines", True))
+        out["raw_text"] = out["text"]
+        out["text"] = ocr.postprocess(out["text"], merge_lines=merge)
+        out["engine"] = engine
+        out["source"] = source
+        return {"ok": True, "data": out}
+
+    def tool_ocr_file(self, path=None):
+        """识别图片：带 path 直接识别（批量/拖放），否则弹多选对话框逐张返回。"""
         try:
             from ..core import ocr
-            import io as _io
-            if not ocr.is_available():
-                return {"ok": False, "err": ocr._UNAVAILABLE_MSG}
+            if path:
+                path = str(path)
+                if not os.path.isfile(path):
+                    return {"ok": False, "err": "文件不存在：%s" % path}
+                with open(path, "rb") as f:
+                    png = f.read()
+                r = self._ocr_run(png, source=path)
+                if r.get("ok") and not (r["data"]["text"] or "").strip():
+                    r["data"]["empty"] = True
+                return r
             if self._window is None:
                 return {"ok": False, "err": "窗口尚未就绪。"}
             result = self._window.create_file_dialog(
-                webview.OPEN_DIALOG, directory="",
+                webview.OPEN_DIALOG, directory="", allow_multiple=True,
                 file_types=("图片文件 (*.png;*.jpg;*.jpeg;*.bmp;*.webp)",),
             )
-            path = str(result[0]) if result else ""
-            if not path or not os.path.isfile(path):
+            paths = [str(p) for p in (result or []) if p]
+            if not paths:
                 return {"ok": False, "err": "未选择图片文件。"}
-            with open(path, "rb") as f:
-                png = f.read()
-            out = ocr.recognize_bytes(png)
-            if not (out["text"] or "").strip():
-                return {"ok": True, "data": {"path": path, "text": "", "lines": [], "empty": True}}
-            log.info("OCR 识别 %s：%d 行文字", path, len(out["lines"]))
-            return {"ok": True, "data": {"path": path, **out}}
+            return {"ok": True, "data": {"paths": paths}}
         except Exception as e:
             return {"ok": False, "err": str(e)}
+
+    def tool_ocr_clipboard(self):
+        """识别剪贴板中的图片（v5.1 粘贴识别）。"""
+        try:
+            from ..core import ocr, screenshot
+            png = screenshot.read_clipboard_png()
+            if not png:
+                return {"ok": False, "err": "剪贴板中没有图片，请先复制一张图片。"}
+            r = self._ocr_run(png, source="剪贴板")
+            if r.get("ok") and not (r["data"]["text"] or "").strip():
+                r["data"]["empty"] = True
+            return r
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def tool_ocr_engines(self):
+        """引擎状态（winrt/rapid 可用性 + umi 服务探测 + 当前选择）。"""
+        from ..core import ocr, ocr_umi
+        url = str(self.cfg.get("ocr_umi_url", "") or ocr_umi.DEFAULT_URL)
+        return {"ok": True, "data": {
+            "engine": self._ocr_engine(),
+            "winrt": ocr.is_available(),
+            "rapid": ocr.rapid_available(),
+            "umi_ready": ocr_umi.server_ready(url),
+            "umi_path": str(self.cfg.get("ocr_umi_path", "") or ""),
+            "umi_url": url,
+            "umi_autostart": bool(self.cfg.get("ocr_umi_autostart", True)),
+        }}
+
+    def ocr_umi_download(self):
+        """下载 Umi-OCR 内核（后台线程，进度经 ocr_download_progress 事件）。"""
+        if getattr(self, "_ocr_dl_running", False):
+            return {"ok": False, "err": "内核正在下载中"}
+        self._ocr_dl_running = True
+
+        def worker():
+            from ..core import ocr_umi
+            try:
+                def cb(done, total):
+                    self.emit("ocr_download_progress", {
+                        "stage": "download", "done": done, "total": total})
+                r = ocr_umi.download_kernel(progress_cb=cb)
+                self.emit("ocr_download_progress", {
+                    "stage": "done", "exe": r["exe"], "cached": r.get("cached")})
+                self.emit_log("Umi-OCR 内核就绪：%s" % r["exe"])
+            except Exception as e:
+                self.emit("ocr_download_progress", {"stage": "error", "err": str(e)})
+                self.emit_log("Umi-OCR 内核下载失败：%s" % e)
+            finally:
+                self._ocr_dl_running = False
+
+        threading.Thread(target=worker, daemon=True, name="ocr-umi-dl").start()
+        return {"ok": True, "data": True}
+
+    def ocr_umi_start(self):
+        """手动启动 Umi 内核服务。"""
+        try:
+            from ..core import ocr_umi
+            r = ocr_umi.ensure_server(
+                str(self.cfg.get("ocr_umi_url", "") or None) or None,
+                exe_path=str(self.cfg.get("ocr_umi_path", "") or ""),
+                autostart=bool(self.cfg.get("ocr_umi_autostart", True)))
+            self._push_state_ocr()
+            return {"ok": True, "data": r}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def _push_state_ocr(self):
+        try:
+            r = self.tool_ocr_engines()
+            if r.get("ok"):
+                self.emit("ocr_state", r["data"])
+        except Exception:
+            pass
 
     # -- 屏幕取色器 + 放大镜 ------------------------------------------------
     def tool_pick_color(self):

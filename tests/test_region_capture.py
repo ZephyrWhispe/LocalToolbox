@@ -68,7 +68,7 @@ def verify_js_syntax():
     # 圈选交互回归（拖选→确认/取消、引导脚本单次启动、后端调用参数个数）
     try:
         result = subprocess.run(
-            ["node", "test_region_ui.js"],
+            ["node", os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_region_ui.js")],
             capture_output=True,
             text=True,
             timeout=30

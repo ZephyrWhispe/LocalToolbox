@@ -23,6 +23,7 @@ _JS_API_PREFIXES = (
     "tool_", "shot_", "pan_", "rec_",
     "editor_", "pin_", "cliphist_", "combine_", "split_", "batch_",
     "scroll_", "upload_", "video_", "dns_",
+    "memo_", "vault_", "backup_", "ocr_", "cap_",
 )
 # 末尾命中的高频查询方法记 DEBUG（调用次数多，避免 INFO 刷屏）
 _QUIET_SUFFIX = ("_get_state", "_list", "_status", "_info", "_mapped",
@@ -76,10 +77,12 @@ class BridgeBase:
         window.events.closed += lambda: setattr(self, "_ready", False)
 
     def _on_loaded(self):
-        self._ready = True
+        # v5.1c：置位与排空同锁完成——避免后台线程在「置位」与「排空」之间
+        # emit 绕过缓冲直达 _push，导致事件先于缓冲事件到达前端
         with self._lock:
             buffered, self._buf = self._buf, []
             pending, self._pending_actions = self._pending_actions, []
+            self._ready = True
         for item in buffered:
             self._push(item[0], item[1])
         for action in pending:
@@ -104,12 +107,19 @@ class BridgeBase:
             _log.warning("事件推送失败 %s: %s", name, e, exc_info=True)
 
     def emit(self, name, payload=None):
-        """线程安全：向前端推送事件，未就绪时先缓冲。"""
-        if self._ready:
-            self._push(name, payload)
-        else:
-            with self._lock:
+        """线程安全：向前端推送事件，未就绪时先缓冲。
+
+        v5.1c：_ready 判定与入缓冲同锁，防止「检查未就绪 → loaded 排空 →
+        才 append」的窗口把事件永久滞留缓冲。
+        """
+        with self._lock:
+            if self._ready:
+                push_now = True
+            else:
                 self._buf.append((name, payload))
+                push_now = False
+        if push_now:
+            self._push(name, payload)
 
     def emit_log(self, msg):
         self.emit("app_log", str(msg))
