@@ -1,6 +1,7 @@
 """图片合并桥接层。"""
 
 import base64
+import math
 
 from .base import BridgeBase
 
@@ -17,7 +18,7 @@ class CombineApi(BridgeBase):
             if direction == "horizontal":
                 result = combine_horizontal(raws, gap, bg_color)
             elif direction == "grid":
-                cols = max(2, int(len(raws) ** 0.5))
+                cols = max(2, math.ceil(len(raws) ** 0.5))
                 result = combine_grid(raws, cols, gap, bg_color)
             else:
                 result = combine_vertical(raws, gap, bg_color)

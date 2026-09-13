@@ -5,6 +5,8 @@ GIF（2/5/10fps，低配）与 MP4 视频（10/15/30fps，可选系统声音，�
 停止立即返回，编码完成后发 ``rec_done`` 事件（含路径/类型/是否含声音）。
 """
 
+import time
+
 from ..core import logger as applog
 from ..core import recorder
 from ..core.recorder import RecorderManager

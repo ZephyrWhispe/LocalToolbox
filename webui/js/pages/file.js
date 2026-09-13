@@ -838,10 +838,10 @@
     refs.btnRename.disabled = !one;
     refs.btnDelete.disabled = !n;
     refs.btnPaste.classList.toggle("primary", !!state.clip);
-    refs.clipLabel.textContent = !state.clip ? "剪贴板：空"
+    refs.clipLabel.textContent = !state.clip ? "剪贴板：空，先复制或剪切项目"
       : (state.clip.action === "copy"
-        ? `已复制 ${state.clip.count} 项（可重复粘贴）`
-        : `已剪切 ${state.clip.count} 项，前往目标目录粘贴`);
+        ? `已复制 ${state.clip.count} 项，可重复粘贴`
+        : `已剪切 ${state.clip.count} 项，粘贴后将移动到目标目录`);
     refs.clipLabel.style.color = state.clip ? "var(--text)" : "var(--faint)";
   }
 

@@ -22,3 +22,4 @@ _cleanup_backup/
 *.tmp
 *.log
 Thumbs.db
+.merkle-snapshot.json

@@ -308,7 +308,8 @@
     setPanBusy(true);
     try {
       const letter = refs.driveLetter.value.trim();
-      const r = await tryCall2("pan_map_drive", letter, "", "", false);
+      const r = await tryCall2("pan_map_drive", letter,
+        refs.mapUser.value.trim(), refs.mapPwd.value, refs.mapPersist.checked);
       if (!r.ok) App.toast(r.err, "error", 6000);
       else App.toast(r.data);
       refs.driveLetter.value = "";
@@ -415,6 +416,9 @@
     // 已保存的 WebDAV 用户名回填（密码后端不返回，属预期）
     if (!refs.rcUser.value.trim() && r.data.user) {
       refs.rcUser.value = String(r.data.user);
+    }
+    if (refs.mapUser && !refs.mapUser.value.trim() && r.data.user) {
+      refs.mapUser.value = String(r.data.user);
     }
   }
 
@@ -634,15 +638,26 @@
         class: "input", placeholder: "盘符（如 E）", maxlength: 1,
         style: { width: "110px" },
       });
+      refs.mapUser = App.h("input", {
+        class: "input", placeholder: "账号（留空用已保存）", style: { width: "130px" },
+      });
+      refs.mapPwd = App.h("input", {
+        class: "input", type: "password", placeholder: "密码", style: { width: "110px" },
+      });
+      refs.mapPersist = App.h("input", { type: "checkbox", checked: true });
       paneMount.appendChild(App.svcCard(
         "映射盘符（把已挂载网盘映射为本地磁盘）",
         [
           App.row(
             App.h("span", { class: "field-label" }, "盘符："), refs.driveLetter,
+            App.h("span", { class: "field-label" }, "账号："), refs.mapUser,
+            App.h("span", { class: "field-label" }, "密码："), refs.mapPwd,
+            App.h("label", { class: "switch", title: "重启后保留该映射（net use /persistent:yes）" },
+              refs.mapPersist, App.h("span", { class: "track" }), "持久化"),
             App.h("button", { class: "btn primary", onclick: mapDrive }, "映射"),
-            App.h("div", { class: "hint" },
-              "映射对象为 OpenList 的 WebDAV 根目录，映射后可在资源管理器中直接使用。若系统提示需要 WebClient 服务，请以管理员运行：net start webclient"),
           ),
+          App.h("div", { class: "hint" },
+            "映射对象为 OpenList 的 WebDAV 根目录，映射后可在资源管理器中直接使用。账号留空时使用上方 Rclone 卡片已保存的 WebDAV 凭据。若系统提示需要 WebClient 服务，请以管理员运行：net start webclient"),
           mappedHead,
         ],
         [],

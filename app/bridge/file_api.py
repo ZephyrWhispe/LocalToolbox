@@ -95,19 +95,6 @@ class FileApi:
         self._file_clip = {"action": "cut", "paths": paths}
         return {"ok": True, "data": {"action": "cut", "count": len(paths)}}
 
-    def file_paste(self, dest):
-        clip = self._file_clip
-        if not clip or not clip["paths"]:
-            return {"ok": False, "err": "剪贴板为空，请先复制或剪切。"}
-        try:
-            if clip["action"] == "cut":
-                msg = file_manager.move_paths(clip["paths"], str(dest))
-                self._file_clip = None
-            else:
-                msg = file_manager.copy_paths(clip["paths"], str(dest))
-            return {"ok": True, "data": {"msg": msg, "cleared": clip["action"] == "cut"}}
-        except Exception as e:
-            return {"ok": False, "err": str(e)}
 
     # -- 其他操作 -------------------------------------------------------
     def file_delete(self, paths):

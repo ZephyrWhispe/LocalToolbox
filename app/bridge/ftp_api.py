@@ -241,6 +241,32 @@ class FtpApi:
             self._ftp_lock.release()
         return {"ok": True, "data": {"path": rp}}
 
+    def ftp_rename(self, entry, new_name):
+        """重命名远程条目（同一目录内改名；核心已有 ftp_client.rename）。"""
+        if self._ftp is None:
+            return {"ok": False, "err": "尚未连接。"}
+        items = self._pick_entries([entry])
+        if not items:
+            return {"ok": False, "err": "请先选择要重命名的项目。"}
+        new_name = str(new_name or "").strip()
+        if not new_name or new_name in (".", ".."):
+            return {"ok": False, "err": "新名称不能为空。"}
+        if "/" in new_name or "\\" in new_name:
+            return {"ok": False, "err": "新名称不能包含路径分隔符。"}
+        remote_dir = self._ftp_remote
+        old_path = posixpath.join(remote_dir.rstrip("/") or "/", items[0]["name"])
+        new_path = posixpath.join(remote_dir.rstrip("/") or "/", new_name)
+        if not self._ftp_lock.acquire(blocking=False):
+            return {"ok": False, "err": "有操作正在进行，请稍候。"}
+        try:
+            if new_path != old_path:
+                ftp_client.rename(self._ftp, old_path, new_path)
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+        finally:
+            self._ftp_lock.release()
+        return {"ok": True, "data": {"path": new_path}}
+
     def ftp_delete(self, entries):
         if self._ftp is None:
             return {"ok": False, "err": "尚未连接。"}

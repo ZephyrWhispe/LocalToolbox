@@ -73,10 +73,12 @@ DEFAULTS = {
     "v2ray_mode": "smart",  # 代理模式：global（全局）/ smart（智能分流）/ direct（直连）
     "v2ray_tun": False,  # TUN 模式（仅 sing-box，需管理员 + wintun.dll）
     "v2ray_sysproxy": "auto",  # 系统代理策略：auto / pac / none / clear
+    "sub_autoupdate_hours": 0,  # 订阅自动更新间隔小时（0=关闭，v3.1）
     "recorder_fps": 5,  # 录制默认帧率：GIF 2/5/10、视频 10/15/30（v3.3）
     "recorder_format": "video",  # 录制格式：gif / video（v3.3 ShareX 式升级）
     "recorder_scope": "full",  # 录制范围：full / region（v3.3）
     "recorder_audio": True,  # 视频录制同时录系统声音（v3.3，WASAPI 回环）
+    "pickcolor_zoom": 9,  # 取色器放大倍数（4–24，v3.3）
     # -- ShareX 功能扩展 --------------------------------------------------
     "editor_last_dir": "",  # 图片编辑器上次打开目录
     "pin_opacity": 0.9,  # 贴图默认不透明度（0.1–1.0）
@@ -120,6 +122,7 @@ DEFAULTS = {
     "backup_autoupload": False,  # 自动定期云备份
     "backup_autoupload_hours": 24,  # 自动备份间隔小时（6–720）
     "file_favs": [],  # 文件管理收藏路径 [{name, path}]（cap 20）
+    "file_tabs": [],  # 文件管理标签会话（「继续上次浏览」，v5.2）
     # -- OCR 升级（v5.1） --------------------------------------------------
     "hotkey_ocr": "Ctrl+Alt+O",  # 截图识字热键（圈选→识别→复制+弹窗）
     "ocr_engine": "winrt",  # 识别引擎：winrt（内置）/ rapid（本地包）/ umi（Umi-OCR HTTP）

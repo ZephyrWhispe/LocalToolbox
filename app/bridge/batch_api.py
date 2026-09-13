@@ -33,6 +33,13 @@ class BatchApi(BridgeBase):
             return {"ok": False, "err": "目录中无图片文件"}
         return {"ok": True, "data": {"paths": files}}
 
+    def batch_pick_outdir(self):
+        from tkinter import filedialog
+        d = filedialog.askdirectory(title="选择输出目录")
+        if not d:
+            return {"ok": False, "err": "未选择目录"}
+        return {"ok": True, "data": {"dir": d}}
+
     def batch_start(self, file_paths, operations, output_dir):
         if self._batch.running:
             return {"ok": False, "err": "正在处理中，请等待完成"}
@@ -51,8 +58,13 @@ class BatchApi(BridgeBase):
         return {"ok": True, "data": {"started": True}}
 
     def _run_batch(self, paths, ops, out_dir, on_progress):
-        result = self._batch.run(paths, ops, out_dir, on_progress)
-        self.emit("batch_done", result.get("data", {}))
+        try:
+            result = self._batch.run(paths, ops, out_dir, on_progress)
+            self.emit("batch_done", result.get("data", {}))
+        except Exception as e:
+            # 兜底：异常也要复位进度并通知前端，避免卡在"处理中"
+            self.emit("batch_done", {"count": 0,
+                                     "errors": [{"file": "", "error": str(e)}]})
 
     def batch_stop(self):
         self._batch.cancel()

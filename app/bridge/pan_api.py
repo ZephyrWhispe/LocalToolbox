@@ -276,7 +276,13 @@ class PanApi:
             return {"ok": False, "err": str(e)}
 
     def pan_open_web(self):
-        return {"ok": True, "data": self._pan.open_web()}
+        """打开 OpenList 管理界面；服务未运行时给出明确提示，避免打开死链。"""
+        try:
+            if not getattr(self._pan, "running", False):
+                return {"ok": False, "err": "OpenList 服务未运行：请先启动服务再打开管理界面。"}
+            return {"ok": True, "data": self._pan.open_web()}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
 
     # -- v3.2 服务增强：重启 / 日志 / 实时监控 ---------------------------------
     def pan_restart(self, fw=True):
@@ -647,10 +653,17 @@ class PanApi:
         srv = self._pan
         if not srv.running:
             return {"ok": False, "err": "OpenList 未运行，无法映射"}
+        # 未显式传入账号时回退到已保存的 WebDAV 凭据（与 Rclone 挂载共用）
+        user = str(user or "").strip()
+        pwd = str(pwd or "")
+        if not user:
+            cfg = self._pan_cfg()
+            user = str(cfg.get("rclone_user", "") or "").strip()
+            pwd = str(cfg.get("rclone_pwd", "") or "")
         url = "http://127.0.0.1:%d/dav" % srv.port
         cmd = ["net", "use", "%s:" % letter, url]
-        if str(user or "").strip():
-            cmd.append("/user:" + str(user).strip())
+        if user:
+            cmd.append("/user:" + user)
             if pwd:
                 cmd.append(str(pwd))
         if persistent:

@@ -1,10 +1,43 @@
 """扫描与映射页桥接：局域网共享扫描（后台线程+事件推送）、凭据连接、驱动器映射/断开。"""
 
 import ctypes
+import re
 import string
 import threading
 
 from ..core import drive_mapper, scanner
+
+
+MAX_SCAN_PORTS = 2048
+
+
+def _parse_ports(spec):
+    """解析端口表达式：支持 "80,443"、"8000-8100"；None/空返回 None（用常见端口）。"""
+    if spec is None:
+        return None
+    if isinstance(spec, (list, tuple)):
+        return list(spec)[:MAX_SCAN_PORTS]
+    out = []
+    for part in re.split(r"[,\s]+", str(spec).strip()):
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                lo, hi = int(a), int(b)
+            except ValueError:
+                continue
+            if lo > hi:
+                lo, hi = hi, lo
+            out.extend(range(max(1, lo), min(65535, hi) + 1))
+        else:
+            try:
+                out.append(int(part))
+            except ValueError:
+                continue
+        if len(out) >= MAX_SCAN_PORTS:
+            break
+    return out[:MAX_SCAN_PORTS] or None
 
 
 def available_drive_letters():
@@ -129,5 +162,18 @@ class ScanApi:
     def scan_mapped(self):
         try:
             return {"ok": True, "data": drive_mapper.list_mapped_drives()}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+    def scan_ports(self, host, ports=None):
+        """TCP 端口扫描：ports 支持 "80,443,8000-8010" 或列表，留空则探测常见端口。"""
+        try:
+            return {"ok": True, "data": scanner.scan_ports(str(host or ""), _parse_ports(ports))}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
+
+    def scan_adapters(self):
+        """本机网卡信息列表。"""
+        try:
+            return {"ok": True, "data": scanner.list_network_adapters()}
         except Exception as e:
             return {"ok": False, "err": str(e)}

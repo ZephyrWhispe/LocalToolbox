@@ -1003,17 +1003,9 @@
                 if (!pw.ok) { App.toast(pw.err, "error", 4000); return; }
                 if (!pw.data) { App.toast("未选择窗口", "info"); return; }
                 App.toast("正在滚动截图，请勿操作鼠标…", "info", 3000);
-                const r = await App.tryCall("scroll_capture", pw.data.hwnd, pw.data.direction || "down");
+                /* 结果由 scroll_done 事件异步带回（见下方 App.on("scroll_done")） */
+                const r = await App.tryCall("scroll_capture", pw.data.hwnd);
                 if (!r.ok) { App.toast(r.err, "error", 5000); return; }
-                if (r.data && r.data.img) {
-                  const img = new Image();
-                  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = r.data.img; });
-                  state.img = img;
-                  state.file = null;
-                  setupCanvas();
-                  refs.info.textContent = `${r.data.w} × ${r.data.h}px · 滚动截图`;
-                  App.toast("滚动截图完成，可在画布上标注", "ok", 4000);
-                }
               } },
             "sep",
             { label: "截图后自动任务…", icon: "settings", onclick: afterModal },
@@ -1139,10 +1131,9 @@
         if (!r.ok) { App.toast(r.err, "error", 5000); return; }
         const link = r.data.url || r.data.link || "";
         if (link) {
-          navigator.clipboard.writeText(link).then(
-            () => App.toast("上传成功，链接已复制", "ok", 5000),
-            () => App.toast("上传成功：" + link, "ok", 8000),
-          );
+          App.copyText(link).then((ok) =>
+            App.toast(ok ? "上传成功，链接已复制" : "上传成功：" + link,
+              "ok", ok ? 5000 : 8000));
         } else {
           App.toast("上传成功", "ok");
         }

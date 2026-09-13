@@ -15,6 +15,93 @@ def _port_open(ip, port, timeout):
         return False
 
 
+COMMON_PORTS = [
+    21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 465, 587, 993, 995,
+    1433, 1521, 2049, 3306, 3389, 5432, 5900, 6379, 8080, 8443, 8888, 9000,
+    11211, 27017,
+]
+
+
+def scan_ports(host, ports=None, timeout=0.5):
+    """并发探测目标主机的 TCP 端口，返回开放端口号（升序）。
+
+    host 可为 IP 或主机名；ports 为空时使用 COMMON_PORTS。
+    """
+    host = str(host or "").strip()
+    if not host:
+        raise ValueError("请填写目标主机或 IP")
+    if ports:
+        clean = []
+        for p in ports:
+            try:
+                n = int(p)
+            except (TypeError, ValueError):
+                continue
+            if 0 < n < 65536:
+                clean.append(n)
+        ports = clean
+    if not ports:
+        ports = list(COMMON_PORTS)
+    targets = sorted(set(ports))
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    open_ports = []
+    with ThreadPoolExecutor(max_workers=min(64, len(targets))) as ex:
+        futures = {ex.submit(_port_open, host, p, timeout): p for p in targets}
+        for f in futures:
+            if f.result():
+                open_ports.append(futures[f])
+    open_ports.sort()
+    log.info("端口扫描 %s：%d 个开放（共探测 %d 个）", host, len(open_ports), len(targets))
+    return open_ports
+
+
+def list_network_adapters():
+    """本机网卡信息：名称 / 描述 / 状态 / IPv4 / 网关 / DNS / MAC。"""
+    script = (
+        "Get-NetIPConfiguration | ForEach-Object { "
+        "$ip = $_.IPv4Address | Select-Object -First 1; "
+        "[PSCustomObject]@{ "
+        "Name = $_.InterfaceAlias; "
+        "Description = $_.InterfaceDescription; "
+        "Status = $_.NetAdapter.Status; "
+        "IP = $(if ($ip) { $ip.IPAddress } else { '' }); "
+        "Prefix = $(if ($ip) { $ip.PrefixLength } else { 0 }); "
+        "Gateway = $(if ($_.IPv4DefaultGateway) { $_.IPv4DefaultGateway.NextHop } else { '' }); "
+        "DNS = (($_.DNSServer | Where-Object { $_.AddressFamily -eq 2 } | "
+        "Select-Object -ExpandProperty ServerAddresses) -join ', '); "
+        "MAC = $_.NetAdapter.MacAddress }"
+        " } | ConvertTo-Json -Depth 3"
+    )
+    result = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+    if not result.ok:
+        return []
+    try:
+        import json
+
+        data = json.loads(result.stdout.strip() or "[]")
+    except Exception:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    out = []
+    for d in data:
+        if not isinstance(d, dict):
+            continue
+        out.append({
+            "name": str(d.get("Name") or ""),
+            "description": str(d.get("Description") or ""),
+            "status": str(d.get("Status") or ""),
+            "ip": str(d.get("IP") or ""),
+            "prefix": int(d.get("Prefix") or 0),
+            "gateway": str(d.get("Gateway") or ""),
+            "dns": str(d.get("DNS") or ""),
+            "mac": str(d.get("MAC") or ""),
+        })
+    return out
+
+
 def _list_local_computers():
     result = run(["net", "view"])
     computers = []
@@ -126,6 +213,8 @@ def scan_network(progress=None, host_callback=None):
         for c in computers:
             shares, error = list_computer_shares(c)
             results.append({"host": c, "ip": "", "shares": shares, "error": error})
+            if host_callback:
+                host_callback(results[-1])
         if progress:
             progress(1, 1, "扫描完成")
         log.info("net view 扫描完成，共 %d 台主机", len(results))

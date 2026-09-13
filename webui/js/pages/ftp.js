@@ -217,6 +217,24 @@
     afterOp(res, "新建文件夹完成");
   }
 
+  async function renameSelected() {
+    const sel = selectedEntries();
+    if (sel.length !== 1) { App.toast("请选择单个项目重命名。"); return; }
+    const e = sel[0];
+    const name = await App.modal({
+      title: "重命名",
+      body: `将「${e.name}」重命名为：`,
+      input: e.name,
+      okText: "确定",
+    });
+    if (name === null) return;
+    const next = name.trim();
+    if (!next || next === e.name) return;
+    setBusy(true);
+    const res = await App.tryCall("ftp_rename", { name: e.name, is_dir: e.is_dir }, next);
+    afterOp(res, "重命名完成");
+  }
+
   async function deleteSelected() {
     const sel = selectedEntries();
     if (!sel.length) { App.toast("请先选择要删除的项目。"); return; }
@@ -422,6 +440,8 @@
             onclick: (ev) => App.overflowMenu(ev.currentTarget, [
               { label: "新建文件夹", icon: "folder",
                 disabled: !state.connected || state.busy, onclick: newFolder },
+              { label: "重命名", icon: "edit",
+                disabled: !state.connected || state.busy, onclick: renameSelected },
               { label: "删除选中", icon: "trash", danger: true,
                 disabled: !state.connected || state.busy, onclick: deleteSelected },
             ]),

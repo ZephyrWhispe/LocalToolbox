@@ -337,7 +337,7 @@ function showPalettePanel() {
       return '<span style="display:inline-block;width:32px;height:32px;background:' +
         c.hex + ';border-radius:4px;margin:2px;cursor:pointer;vertical-align:middle" ' +
         'title="' + c.hex + ' (' + c.percent + '%)" ' +
-        'onclick="navigator.clipboard.writeText(\'' + c.hex + '\')"></span>';
+        'onclick="App.copyText(\'' + c.hex + '\')"></span>';
     }).join("");
     App.toast("已提取 " + colors.length + " 种主色调，点击色块复制 HEX");
     var panel = h("div", {class: "palette-panel", html: html});
@@ -362,7 +362,7 @@ function uploadImage() {
   var provider = App.state.cfg.upload_service || "imgur";
   call("upload_image", state.dataUrl, provider).then(function(r) {
     if (r.data && r.data.url) {
-      navigator.clipboard.writeText(r.data.url).catch(function(){});
+      App.copyText(r.data.url);
       App.toast("已上传: " + r.data.url + " (链接已复制)", "success");
     } else {
       App.toast(r.err || "上传失败", "error");

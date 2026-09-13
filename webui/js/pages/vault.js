@@ -176,6 +176,38 @@
     });
   }
 
+  /* ---------------- 安全设置（自动锁定 / 清剪贴板） ---------------- */
+  async function showVaultSecurity() {
+    const cfg = App.state.cfg || {};
+    const autolock = App.h("input", {
+      class: "input", type: "number", min: "0", max: "1440",
+      value: String(cfg.vault_autolock_min != null ? cfg.vault_autolock_min : 15),
+      style: { width: "90px" },
+    });
+    const clearSec = App.h("input", {
+      class: "input", type: "number", min: "0", max: "600",
+      value: String(cfg.vault_clip_clear_sec != null ? cfg.vault_clip_clear_sec : 30),
+      style: { width: "90px" },
+    });
+    const ok = await App.modal({
+      title: "密码库安全设置",
+      body: App.h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+        App.h("div", { class: "row" },
+          App.h("span", { class: "field-label" }, "空闲自动锁定（分钟，0 = 不锁）："), autolock),
+        App.h("div", { class: "row" },
+          App.h("span", { class: "field-label" }, "复制密码后清剪贴板（秒，0 = 不清）："), clearSec),
+        App.h("div", { class: "hint" },
+          "自动锁定由后端定时器执行；清剪贴板仅在剪贴板内容仍为该密码时清除。")),
+      okText: "保存",
+    });
+    if (!ok) return;
+    const r1 = await App.tryCall("cfg_set", "vault_autolock_min", parseInt(autolock.value, 10) || 0);
+    if (!r1.ok) { App.toast(r1.err, "error"); return; }
+    const r2 = await App.tryCall("cfg_set", "vault_clip_clear_sec", parseInt(clearSec.value, 10) || 0);
+    if (!r2.ok) { App.toast(r2.err, "error"); return; }
+    App.toast("安全设置已保存", "ok");
+  }
+
   /* ---------------- 列表 ---------------- */
   function renderList() {
     refs.body.innerHTML = "";
@@ -210,6 +242,7 @@
       App.h("button", {
         class: "btn", title: "锁定与口令管理",
         onclick: (ev) => App.overflowMenu(ev.currentTarget, [
+          { label: "安全设置（自动锁定 / 清剪贴板）", icon: "shield", onclick: showVaultSecurity },
           { label: "更改主口令（全库重加密）", icon: "key", onclick: showChangePwd },
           { label: "锁定密码库", icon: "shield",
             onclick: async () => {

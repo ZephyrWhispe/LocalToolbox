@@ -20,7 +20,7 @@ from ..core import logger as applog
 _JS_API_PREFIXES = (
     "clip_", "km_", "xfer_", "cfg_", "app_", "devices_", "device_",
     "share_", "web_", "ftp_", "scan_", "network_", "file_", "shell_", "log_",
-    "tool_", "shot_", "pan_", "rec_",
+    "tool_", "shot_", "pan_", "rec_", "proxy_", "clash_", "routing_",
     "editor_", "pin_", "cliphist_", "combine_", "split_", "batch_",
     "scroll_", "upload_", "video_", "dns_",
     "memo_", "vault_", "backup_", "ocr_", "cap_",

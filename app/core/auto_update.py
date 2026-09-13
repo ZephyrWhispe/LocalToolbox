@@ -100,7 +100,7 @@ class AutoUpdateChecker:
         if self._stop.wait(FIRST_DELAY_SECONDS):
             return
         while not self._stop.is_set():
-            st = self._settings()
+
             try:
                 self.check_once(auto=True)
             except Exception as e:

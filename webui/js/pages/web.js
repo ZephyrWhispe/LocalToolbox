@@ -21,7 +21,16 @@
         ? App.statusTag(`运行中（端口 ${state.port}）`, "ok", "check")
         : App.statusTag("未运行"),
     );
-    refs.url.textContent = state.running ? (urls || []).slice(0, 3).join("  ") : "";
+    const list = state.running ? (urls || []) : [];
+    refs.url.replaceChildren(
+      ...list.map((u) => App.h("span", {
+        class: "mono",
+        style: { color: "var(--accent)", userSelect: "text",
+                 marginRight: "10px", cursor: "pointer" },
+        title: "点击复制该地址",
+        onclick: async () => { await App.copyText(u); App.toast("已复制地址", "ok"); },
+      }, u)),
+    );
   }
 
   async function refresh() {

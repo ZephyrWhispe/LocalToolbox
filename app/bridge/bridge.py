@@ -54,7 +54,7 @@ from .web_api import WebApi
 from .cap_api import CapApi
 from .win_api import WindowApi
 
-APP_VERSION = "5.1b"
+APP_VERSION = "5.5"
 
 # v5.4 O7：整机配置导出脱敏清单（顶层键 / backup_targets 子键）
 CFG_SENSITIVE_KEYS = {"rclone_pwd", "upload_custom_key"}
@@ -335,6 +335,7 @@ class Bridge(
             "rclone_bin", "rclone_autostart", "rclone_user", "rclone_pwd",
             "rclone_mount_type", "rclone_mount_target", "app_autostart",
             "recorder_fps", "recorder_format", "recorder_scope", "recorder_audio",
+            "pickcolor_zoom",
             "sub_autoupdate_hours",
             "clash_bin", "clash_mixed_port", "clash_api_port", "clash_mode",
             "clash_tun", "clash_sub_autoupdate_hours", "clash_log_level",

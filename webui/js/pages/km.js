@@ -171,7 +171,7 @@
   }
 
   async function doAllow(e) {
-    const r = await App.tryCall("cfg_set", "km_allow", e.target.checked);
+    const r = await App.tryCall("km_set_allow", e.target.checked);
     if (!r.ok) App.toast(r.err, "error", 6000);
     await refresh();
   }

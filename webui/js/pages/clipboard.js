@@ -34,10 +34,16 @@
     );
   }
 
+  function entrySearchText(e) {
+    if (e.kind === "image") return `图片 image ${e.device || ""}`;
+    if (e.kind === "file") return `${e.file_name || ""} ${e.file_path || ""} 文件`;
+    return e.text || e.preview || "";
+  }
+
   function renderHistory() {
     const kw = state.search.trim().toLowerCase();
     const items = state.history.filter(
-      (e) => !kw || (e.text || "").toLowerCase().includes(kw),
+      (e) => !kw || entrySearchText(e).toLowerCase().includes(kw),
     );
     refs.histList.innerHTML = "";
     if (!items.length) {

@@ -368,6 +368,136 @@
     else App.toast("高级配置已保存，属性在下次启动生效", "ok");
   }
 
+  /* ---------------- 策略组（Clash Verge 风格） ---------------- */
+  async function refreshGroups() {
+    if (!refs.groups) return;
+    const r = await App.tryCall("proxy_groups");
+    if (!r.ok) {
+      refs.groups.replaceChildren(App.h("div", { class: "empty" }, r.err || "读取策略组失败"));
+      return;
+    }
+    const d = r.data || {};
+    refs.groups.replaceChildren();
+    if (!(d.groups || []).length) {
+      refs.groups.appendChild(App.h("div", { class: "empty" },
+        "暂无策略组。点上方「编辑策略组」按备注 / 地址 / 协议关键字分组；启动核心后可按组切换。"));
+      return;
+    }
+    if (!d.clash) {
+      refs.groups.appendChild(App.h("div", { class: "hint", style: { marginBottom: "8px" } },
+        "代理未运行：当前仅显示分组定义，启动后可实时切换成员。"));
+    }
+    d.groups.forEach((g) => {
+      const members = App.h("div", { class: "list", style: { maxHeight: "220px", overflowY: "auto" } });
+      (g.members || []).forEach((m) => {
+        const isNow = !!g.now && m.tag === g.now;
+        members.appendChild(App.h("div", { class: "list-item" + (isNow ? " sel" : "") },
+          App.h("span", { class: "li-main" },
+            App.h("span", { class: "li-title" }, App.esc(m.remark || m.tag)),
+            App.h("span", { class: "li-sub mono" }, m.tag)),
+          App.h("span", { style: { flex: "none" } }, latencyTag(m.latency)),
+          App.h("button", {
+            class: "btn sm",
+            disabled: !d.clash || g.type !== "selector" || isNow,
+            title: g.type === "selector" ? "切换到此成员" : "仅 selector 组可手动切换",
+            onclick: async () => {
+              const s = await App.tryCall("proxy_group_select", g.name, m.tag);
+              if (!s.ok) { App.toast(s.err, "error", 6000); return; }
+              App.toast(`「${g.name}」已切换为 ${m.remark || m.tag}`, "ok");
+              await refreshGroups();
+            },
+          }, isNow ? "当前" : (g.type === "selector" ? "切换" : "—")),
+        ));
+      });
+      refs.groups.appendChild(App.h("div", { class: "card" },
+        App.h("div", { class: "card-title" },
+          `${g.name}（${g.type === "urltest" ? "自动测速" : "手动选择"}）`),
+        App.h("div", { class: "hint" },
+          `过滤关键字：${g.filter || "全部"} · 测试间隔 ${g.interval || "5m"}`),
+        members));
+    });
+  }
+
+  async function editGroups() {
+    const r = await App.tryCall("proxy_groups");
+    const cur = ((r.ok && r.data && r.data.groups) || []).map((g) => ({
+      name: g.name, type: g.type, filter: g.filter, interval: g.interval,
+    }));
+    const v = await App.modal({
+      title: "编辑策略组",
+      textarea: JSON.stringify(cur, null, 2),
+      okText: "保存",
+      body: "JSON 数组，每项 {name, type, filter, interval}。\n" +
+        "type：selector=运行中手动切换；urltest=自动选延迟最低。\n" +
+        "filter：按备注 / 地址 / 协议匹配的关键字（逗号分隔，留空或 * 表示全部节点）。\n" +
+        "保存后需重启核心生效。" +
+        '\n\n示例：[{"name":"自动选择","type":"urltest","filter":"","interval":"5m"}]',
+    });
+    if (v == null) return;
+    let groups;
+    try {
+      groups = JSON.parse(v.trim() || "[]");
+    } catch (e) {
+      App.toast("JSON 解析失败：" + e.message, "error", 6000);
+      return;
+    }
+    if (!Array.isArray(groups)) { App.toast("策略组必须是 JSON 数组", "error"); return; }
+    const s = await App.tryCall("proxy_save_groups", groups);
+    if (!s.ok) { App.toast(s.err, "error", 6000); return; }
+    App.toast(`策略组已保存（${(s.data || []).length} 个）`, "ok");
+    await refreshGroups();
+  }
+
+  /* ---------------- 连接监控 ---------------- */
+  async function refreshConns() {
+    if (!refs.conns) return;
+    const r = await App.tryCall("proxy_connections");
+    if (!r.ok) {
+      refs.conns.replaceChildren(App.h("div", { class: "empty" },
+        r.err || "读取连接失败（代理未运行）"));
+      if (refs.connStat) refs.connStat.textContent = "";
+      return;
+    }
+    const d = r.data || {};
+    refs.conns.replaceChildren();
+    if (refs.connStat) {
+      refs.connStat.textContent =
+        `活动 ${(d.connections || []).length} · 上传 ${App.fmtBytes(d.upload_total || 0)}` +
+        ` · 下载 ${App.fmtBytes(d.download_total || 0)}`;
+    }
+    if (!(d.connections || []).length) {
+      refs.conns.appendChild(App.h("div", { class: "empty" }, "暂无活动连接"));
+      return;
+    }
+    d.connections.forEach((c) => {
+      refs.conns.appendChild(App.h("div", { class: "list-item" },
+        App.h("span", { class: "li-main" },
+          App.h("span", { class: "li-title" }, App.esc(c.host || c.dest || "(未知目标)")),
+          App.h("span", { class: "li-sub mono" },
+            `${c.network || "tcp"} · ${(c.chains && c.chains.length) ? c.chains.join(" → ") : "—"}` +
+            (c.process ? ` · ${c.process}` : ""))),
+        App.h("span", { class: "hint", style: { flex: "none" } },
+          `↑${App.fmtBytes(c.upload || 0)} ↓${App.fmtBytes(c.download || 0)}`),
+        App.h("button", {
+          class: "btn sm danger", title: "关闭此连接",
+          onclick: async () => {
+            const s = await App.tryCall("proxy_close_connection", c.id);
+            if (!s.ok) { App.toast(s.err, "error", 5000); return; }
+            await refreshConns();
+          },
+        }, "关闭"),
+      ));
+    });
+  }
+
+  async function closeAllConns() {
+    if (!(await App.confirm("关闭全部连接", "确定关闭所有活动连接吗？"))) return;
+    const r = await App.tryCall("proxy_close_all_connections");
+    if (!r.ok) { App.toast(r.err, "error", 6000); return; }
+    App.toast("已关闭全部连接", "ok");
+    await refreshConns();
+  }
+
   async function importSub() {
     const url = refs.subUrl.value.trim();
     if (!url) { App.toast("请输入订阅地址。"); return; }
@@ -522,6 +652,8 @@
       const paneRun = App.h("div");
       const paneImport = App.h("div");
       const paneNodes = App.h("div");
+      const paneGroups = App.h("div");
+      const paneConns = App.h("div");
 
       /* 页签 1：核心与运行控制（主任务：启动 / 停止 / 模式） */
       refs.dlBtn = App.h("button", { class: "btn", onclick: downloadBin }, "自动下载核心");
@@ -669,11 +801,49 @@
         [App.h("button", { class: "btn", onclick: () => refreshState() }, "刷新")],
       ));
 
+      /* 页签 4：策略组（Clash Verge 风格分组 + 运行中切换） */
+      refs.groups = App.h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } });
+      paneGroups.appendChild(App.svcCard(
+        "策略组（Clash Verge 风格）",
+        [
+          App.h("div", { class: "hint" },
+            "按关键字把节点归入策略组：selector 组可在运行中手动切换成员，urltest 组自动选择延迟最低者。" +
+            "策略组定义改动需重启核心生效。"),
+          refs.groups,
+        ],
+        [
+          App.h("button", { class: "btn", onclick: editGroups }, "编辑策略组"),
+          App.h("button", { class: "btn", onclick: () => refreshGroups() }, "刷新"),
+        ],
+      ));
+
+      /* 页签 5：连接监控（活动连接 + 实时流量 + 单条/全部关闭） */
+      refs.connStat = App.h("span", { class: "hint", style: { color: "var(--muted)" } }, "");
+      refs.conns = App.h("div", { class: "list", style: { minHeight: "180px", maxHeight: "420px", overflowY: "auto" } });
+      paneConns.appendChild(App.svcCard(
+        "连接监控",
+        [
+          App.row(App.h("span", { class: "field-label" }, "统计："), refs.connStat),
+          refs.conns,
+        ],
+        [
+          App.h("button", { class: "btn", onclick: () => refreshConns() }, "刷新"),
+          App.h("button", { class: "btn danger", onclick: closeAllConns }, "全部关闭"),
+        ],
+      ));
+
       const nav = App.subnav([
         { label: "运行控制", el: paneRun },
         { label: "节点导入", el: paneImport },
         { label: "节点列表", el: paneNodes },
-      ]);
+        { label: "策略组", el: paneGroups },
+        { label: "连接监控", el: paneConns },
+      ], {
+        onSwitch: (i) => {
+          if (i === 3) refreshGroups();
+          else if (i === 4) refreshConns();
+        },
+      });
       el.appendChild(nav);
       nav.panes.forEach((p) => el.appendChild(p));
 

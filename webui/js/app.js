@@ -452,6 +452,16 @@
             },
           }) : null,
           d.file_port ? App.h("button", {
+            class: "icon-btn", title: "发送文件夹",
+            html: App.icon("folder", 13),
+            onclick: async (e) => {
+              e.stopPropagation();
+              const r = await App.tryCall("xfer_pick_folder");
+              if (!r.ok || !r.data) return;
+              App.xferSendToDevice(d, [r.data]);
+            },
+          }) : null,
+          d.file_port ? App.h("button", {
             class: "icon-btn", title: d.paired ? "已配对（传输自动加密）" : "配对加密",
             style: d.paired ? { color: "var(--ok)" } : null,
             html: App.icon("shield", 13),

@@ -371,16 +371,26 @@ class OpenListManager:
 
     # -- 日志尾部 -----------------------------------------------------------
     def tail_log(self, lines=200):
-        """读取数据目录内最新日志文件的末尾 lines 行。返回 (文件名, 内容)。"""
+        """读取数据目录内最新日志文件的末尾 lines 行（递归子目录）。返回 (文件名, 内容)。
+
+        OpenList 的日志可能位于 data_dir/log/ 等子目录，故不再只扫描顶层。
+        """
         try:
             if not os.path.isdir(self.data_dir):
                 return "", ""
+            base_depth = self.data_dir.rstrip("\\/").count(os.sep)
             cands = []
-            for name in os.listdir(self.data_dir):
-                if name.lower().endswith(".log"):
-                    p = os.path.join(self.data_dir, name)
-                    if os.path.isfile(p):
-                        cands.append((os.path.getmtime(p), p))
+            for root, dirs, files in os.walk(self.data_dir):
+                # 限制递归深度，避免误入深层/巨大目录树拖慢读取
+                if root.count(os.sep) - base_depth >= 3:
+                    dirs[:] = []
+                for name in files:
+                    if name.lower().endswith(".log"):
+                        p = os.path.join(root, name)
+                        try:
+                            cands.append((os.path.getmtime(p), p))
+                        except OSError:
+                            continue
             if not cands:
                 return "", ""
             _, path = max(cands)

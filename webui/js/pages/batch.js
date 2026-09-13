@@ -226,12 +226,12 @@ function startBatch() {
   if (!state.operations.length) return App.toast("请添加处理操作", "warn");
   /* 用系统目录选择器（原生 prompt() 在 WebView2 里不可用） */
   App.toast("请选择输出目录…", "info", 2500);
-  call("batch_pick_dir").then(function(r) {
-    var paths = (r.data && r.data.paths) || [];
-    if (!paths.length) return;
+  call("batch_pick_outdir").then(function(r) {
+    var outDir = (r.data && r.data.dir) || "";
+    if (!outDir) return;
     state.running = true;
     state.progressEl.style.display = "block";
-    call("batch_start", state.files, state.operations, paths[0]).then(function(r2) {
+    call("batch_start", state.files, state.operations, outDir).then(function(r2) {
       if (!r2.ok) {
         state.running = false;
         state.progressEl.style.display = "none";

@@ -359,7 +359,7 @@
           renderBody();
         }
       };
-      el.addEventListener("keydown", keyHandler);
+      el.onkeydown = keyHandler;
 
       await refresh();
     },

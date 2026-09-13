@@ -288,6 +288,30 @@
     if (logFn) logFn(msg);
   }
 
+  /* 手动发送目标校验：返回 {ip, port}，非法时 toast 并返回 null */
+  function readTarget(refs) {
+    const ip = (refs.ipInput.value || "").trim();
+    const port = parseInt(refs.portInput.value, 10);
+    const segs = ip.split(".");
+    const ipOk = segs.length === 4 && segs.every((s) => {
+      if (!/^\d{1,3}$/.test(s)) return false;
+      if (s.length > 1 && s[0] === "0") return false;
+      const n = parseInt(s, 10);
+      return n >= 0 && n <= 255;
+    });
+    if (!ipOk) { App.toast("请输入合法的 IPv4 地址", "error"); return null; }
+    if (!port || port < 1 || port > 65535) { App.toast("端口需在 1-65535 之间", "error"); return null; }
+    return { ip: ip, port: port };
+  }
+
+  /* 选择文件或文件夹：返回待发送路径数组，取消时返回 null */
+  async function pickPaths(folder) {
+    const r = await App.tryCall(folder ? "xfer_pick_folder" : "xfer_pick_files");
+    if (!r.ok) { if (r.err) App.toast(r.err, "error", 5000); return null; }
+    if (folder) return r.data ? [r.data] : null;
+    return (r.data && r.data.length) ? r.data : null;
+  }
+
   /* ---------------- 发送入口（供设备卡片调用） ---------------- */
   App.xferSendToDevice = async function (device, paths) {
     const name = device.alias || device.name;
@@ -488,54 +512,51 @@
             App.h("button", {
               class: "btn",
               onclick: async () => {
-                const ip = (refs.ipInput.value || "").trim();
-                const port = parseInt(refs.portInput.value, 10);
-                // IP 逐段校验：每段 0-255 且拒绝前导零
-                const segs = ip.split(".");
-                const ipOk = segs.length === 4 && segs.every((s) => {
-                  if (!/^\d{1,3}$/.test(s)) return false;
-                  if (s.length > 1 && s[0] === "0") return false;
-                  const n = parseInt(s, 10);
-                  return n >= 0 && n <= 255;
-                });
-                if (!ipOk) {
-                  App.toast("请输入合法的 IPv4 地址", "error"); return;
-                }
-                if (!port || port < 1 || port > 65535) {
-                  App.toast("端口需在 1-65535 之间", "error"); return;
-                }
-                const r = await App.tryCall("xfer_pick_files");
-                if (!r.ok || !r.data || !r.data.length) return;
-                const s = await App.tryCall("xfer_send", ip, port, r.data, ip);
+                const t = readTarget(refs);
+                if (!t) return;
+                const paths = await pickPaths(false);
+                if (!paths) return;
+                const s = await App.tryCall("xfer_send", t.ip, t.port, paths, t.ip);
                 if (!s.ok) { App.toast(s.err, "error", 5000); return; }
-                App.toast(`开始向 ${ip} 发送 ${s.data.files} 个文件（${App.fmtBytes(s.data.total)}）`, "ok", 5000);
+                App.toast(`开始向 ${t.ip} 发送 ${s.data.files} 个文件（${App.fmtBytes(s.data.total)}）`, "ok", 5000);
               },
             }, "选择文件并发送"),
             App.h("button", {
               class: "btn",
               onclick: async () => {
-                const ip = (refs.ipInput.value || "").trim();
-                const port = parseInt(refs.portInput.value, 10);
-                const segs = ip.split(".");
-                const ipOk = segs.length === 4 && segs.every((s) => {
-                  if (!/^\d{1,3}$/.test(s)) return false;
-                  if (s.length > 1 && s[0] === "0") return false;
-                  const n = parseInt(s, 10);
-                  return n >= 0 && n <= 255;
-                });
-                if (!ipOk) {
-                  App.toast("请输入合法的 IPv4 地址", "error"); return;
-                }
-                if (!port || port < 1 || port > 65535) {
-                  App.toast("端口需在 1-65535 之间", "error"); return;
-                }
-                const r = await App.tryCall("xfer_pick_files");
-                if (!r.ok || !r.data || !r.data.length) return;
-                const s = await App.tryCall("xfer_enqueue", ip, port, r.data, ip);
+                const t = readTarget(refs);
+                if (!t) return;
+                const paths = await pickPaths(true);
+                if (!paths) return;
+                const s = await App.tryCall("xfer_send", t.ip, t.port, paths, t.ip);
                 if (!s.ok) { App.toast(s.err, "error", 5000); return; }
-                App.toast(`已加入发送队列，将发送到 ${ip}`, "ok", 5000);
+                App.toast(`开始向 ${t.ip} 发送 ${s.data.files} 个文件（${App.fmtBytes(s.data.total)}）`, "ok", 5000);
+              },
+            }, "选择文件夹并发送"),
+            App.h("button", {
+              class: "btn",
+              onclick: async () => {
+                const t = readTarget(refs);
+                if (!t) return;
+                const paths = await pickPaths(false);
+                if (!paths) return;
+                const s = await App.tryCall("xfer_enqueue", t.ip, t.port, paths, t.ip);
+                if (!s.ok) { App.toast(s.err, "error", 5000); return; }
+                App.toast(`已加入发送队列，将发送到 ${t.ip}`, "ok", 5000);
               },
             }, "选择文件并加入队列"),
+            App.h("button", {
+              class: "btn",
+              onclick: async () => {
+                const t = readTarget(refs);
+                if (!t) return;
+                const paths = await pickPaths(true);
+                if (!paths) return;
+                const s = await App.tryCall("xfer_enqueue", t.ip, t.port, paths, t.ip);
+                if (!s.ok) { App.toast(s.err, "error", 5000); return; }
+                App.toast(`已加入发送队列，将发送到 ${t.ip}`, "ok", 5000);
+              },
+            }, "选择文件夹并加入队列"),
           ),
         ], { open: false }),
         refs.log,

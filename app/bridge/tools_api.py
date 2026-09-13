@@ -315,10 +315,15 @@ class ToolsApi:
             pass
 
     # -- 屏幕取色器 + 放大镜 ------------------------------------------------
-    def tool_pick_color(self):
-        """运行屏幕取色器（阻塞直至锁定/取消），返回 {rgb,hex} 或 None。"""
+    def tool_pick_color(self, zoom=None):
+        """运行屏幕取色器（阻塞直至锁定/取消），返回 {rgb,hex} 或 None。
+
+        zoom：放大倍数（4–24），省略时读取配置 pickcolor_zoom。
+        """
         try:
             from ..core import pickcolor
-            return {"ok": True, "data": pickcolor.pick_color_blocking()}
+            if zoom is None:
+                zoom = self.cfg.get("pickcolor_zoom", pickcolor.ZOOM)
+            return {"ok": True, "data": pickcolor.pick_color_blocking(zoom=zoom)}
         except Exception as e:
             return {"ok": False, "err": str(e)}

@@ -1,6 +1,7 @@
 """剪贴板历史桥接层。"""
 
 import base64
+import os
 
 from .base import BridgeBase
 
@@ -138,11 +139,16 @@ class ClipHistApi(BridgeBase):
         if entry.get("kind") != "text" or not entry.get("text"):
             return {"ok": False, "err": "自定义命令仅支持文本条目"}
         text = str(entry["text"])[:2000]
-        cmd = str(cmds[idx]["cmd"]).replace("{text}", text)
+        # 文本经环境变量 CLIP_TEXT 传递，模板中的 {text} 替换为 %CLIP_TEXT%，
+        # 避免剪贴板内容里的 & | > " ^ 等元字符被 cmd 当作命令解析（注入）。
+        env = dict(os.environ)
+        env["CLIP_TEXT"] = text
+        template = str(cmds[idx]["cmd"])
+        cmd = template.replace("{text}", "%CLIP_TEXT%")
         try:
             import subprocess
             subprocess.Popen(
-                cmd, shell=True,
+                cmd, shell=True, env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL)

@@ -191,6 +191,58 @@
     refreshMapped();
   }
 
+  /* ---------------- 网卡信息 ---------------- */
+  async function refreshAdapters() {
+    refs.adapters.innerHTML = "";
+    const r = await App.tryCall("scan_adapters");
+    if (!r.ok) {
+      refs.adapters.appendChild(App.h("div", { class: "empty" }, r.err || "读取网卡信息失败"));
+      return;
+    }
+    const list = r.data || [];
+    if (!list.length) {
+      refs.adapters.appendChild(App.h("div", { class: "empty" }, "未检测到网卡"));
+      return;
+    }
+    for (const a of list) {
+      const up = String(a.status || "").toLowerCase() === "up";
+      refs.adapters.appendChild(App.h("div", { class: "list-item" },
+        App.h("span", { class: "dot" + (up ? " on" : "") }),
+        App.h("span", { class: "li-main" },
+          App.h("div", { class: "li-title" }, a.name || a.description || "(未命名网卡)"),
+          App.h("div", { class: "li-sub mono" },
+            (a.ip ? a.ip + (a.prefix ? "/" + a.prefix : "") : "无 IPv4") +
+            (a.gateway ? " · 网关 " + a.gateway : "") +
+            (a.dns ? " · DNS " + a.dns : "") +
+            (a.mac ? " · " + a.mac : ""))),
+        App.h("span", { class: "tag " + (up ? "ok" : "") }, a.status || "未知"),
+      ));
+    }
+  }
+
+  /* ---------------- 端口扫描 ---------------- */
+  async function scanPorts() {
+    const host = refs.portHost.value.trim();
+    if (!host) { App.toast("请填写目标主机或 IP。", "warn"); return; }
+    refs.portBtn.disabled = true;
+    refs.portResult.innerHTML = "";
+    refs.portResult.appendChild(App.h("div", { class: "empty" }, "正在扫描端口…"));
+    const r = await App.tryCall("scan_ports", host, refs.portSpec.value.trim());
+    refs.portBtn.disabled = false;
+    refs.portResult.innerHTML = "";
+    if (!r.ok) {
+      refs.portResult.appendChild(App.h("div", { class: "empty" }, r.err || "扫描失败"));
+      return;
+    }
+    const ports = r.data || [];
+    if (!ports.length) {
+      refs.portResult.appendChild(App.h("div", { class: "empty" }, "未发现开放端口"));
+      return;
+    }
+    refs.portResult.appendChild(App.h("div", { class: "row", style: { flexWrap: "wrap", gap: "6px" } },
+      ...ports.map((p) => App.h("span", { class: "tag ok mono" }, String(p)))));
+  }
+
   /* ---------------- 页面注册 ---------------- */
   App.registerPage({
     id: "scan",
@@ -215,6 +267,16 @@
       refs.letter = App.h("select", { class: "input", style: { width: "90px" } });
       refs.mapBtn = App.h("button", { class: "btn primary", onclick: mapDrive }, "映射");
       refs.mapped = App.h("div", { class: "list", style: { maxHeight: "220px", overflowY: "auto" } });
+      refs.portHost = App.h("input", {
+        class: "input grow", placeholder: "目标主机或 IP，例如 192.168.1.10",
+      });
+      refs.portSpec = App.h("input", {
+        class: "input mono", style: { width: "230px" },
+        placeholder: "端口，如 80,443,8000-8010（留空=常见端口）",
+      });
+      refs.portBtn = App.h("button", { class: "btn primary", onclick: scanPorts }, "扫描端口");
+      refs.portResult = App.h("div", { class: "list", style: { minHeight: "40px" } });
+      refs.adapters = App.h("div", { class: "list", style: { maxHeight: "260px", overflowY: "auto" } });
 
       el.appendChild(App.h("div", { class: "page-head" },
         App.h("h2", null, "扫描与映射"),
@@ -225,6 +287,27 @@
         App.h("div", { class: "card-title" }, "局域网扫描"),
         App.h("div", { class: "row" }, refs.scanBtn, App.h("span", { class: "grow" }), refs.spin, refs.status),
         refs.tree,
+      ));
+
+      el.appendChild(App.h("div", { class: "card" },
+        App.h("div", { class: "card-title" }, "端口扫描"),
+        App.h("div", { class: "row" }, refs.portHost, refs.portSpec, refs.portBtn),
+        App.h("div", { class: "hint" }, "探测目标主机开放的 TCP 端口；支持逗号分隔与区间（如 80,443,8000-8010），留空则探测常见端口。"),
+        refs.portResult,
+      ));
+
+      el.appendChild(App.h("div", { class: "card" },
+        App.h("div", { class: "card-title" }, "网卡信息"),
+        App.h("div", { class: "row" },
+          App.h("span", { class: "hint" }, "本机网络适配器：IPv4 / 网关 / DNS / MAC"),
+          App.h("span", { class: "grow" }),
+          App.h("button", {
+            class: "btn sm",
+            html: App.icon("refresh", 12) + "<span>刷新</span>",
+            onclick: refreshAdapters,
+          }),
+        ),
+        refs.adapters,
       ));
 
       el.appendChild(App.h("div", { class: "card" },
@@ -267,8 +350,9 @@
 
       await refreshLetters();
       await refreshMapped();
+      await refreshAdapters();
     },
 
-    show() { refreshLetters(); refreshMapped(); },
+    show() { refreshLetters(); refreshMapped(); refreshAdapters(); },
   });
 })();

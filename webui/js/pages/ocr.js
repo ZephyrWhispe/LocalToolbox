@@ -258,7 +258,7 @@
           ondrop: (e) => {
             e.preventDefault();
             const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-            const paths = files.map((f) => f.path).filter(Boolean);
+            const paths = files.map((f) => f.pywebviewFullPath).filter(Boolean);
             if (!paths.length) { App.toast("无法获取拖入文件路径", "warn"); return; }
             runQueue(paths);
           },

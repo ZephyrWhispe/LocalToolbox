@@ -19,12 +19,11 @@
     });
   }
   function copyBtn(getText) {
-    return App.h("button", { class: "btn sm", onclick: () => {
-      if (!getText()) return;
-      navigator.clipboard.writeText(getText()).then(
-        () => App.toast("已复制", "ok"),
-        () => App.toast("复制失败", "error"),
-      );
+    return App.h("button", { class: "btn sm", onclick: async () => {
+      const text = getText();
+      if (!text) return;
+      const ok = await App.copyText(text);
+      App.toast(ok ? "已复制" : "复制失败", ok ? "ok" : "error");
     } }, "复制");
   }
   /* 无标题卡片（工具页外壳已带标题，卡片只做视觉分组） */
@@ -1034,7 +1033,8 @@
     let lastLiveKey = "";
     function paneOverview() {
       const liveBox = App.h("div", { style: { marginBottom: "10px" } });
-      const infoBox = App.h("div", null, App.h("div", { class: "empty" }, "正在读取硬件信息…"));
+      /* v5.5：移除 infoBox 静态占位——加载/空态/重试由 makePane 自身状态管理，
+         此前 infoBox 永远停留在"正在读取硬件信息…"成为死提示（实测截图） */
       const p = makePane({
         api: "tool_hw_summary",
         render: (d) => {
@@ -1085,7 +1085,7 @@
         }, 10000);
       }
       return {
-        el: App.h("div", null, liveBox, infoBox, p.el),
+        el: App.h("div", null, liveBox, p.el),
         load: async () => { await p.load(); pollLive(); },
       };
     }
@@ -2366,14 +2366,12 @@
       actions(
         App.h("button", { class: "btn sm", onclick: refresh }, "刷新"),
         spacer(),
-        App.h("button", { class: "btn sm", onclick: () => {
+        App.h("button", { class: "btn sm", onclick: async () => {
           const s = window.screen;
           const dpr = window.devicePixelRatio || 1;
           const text = `分辨率: ${s.width}×${s.height}\n可用: ${s.availWidth}×${s.availHeight}\n色深: ${s.colorDepth}bit\nDPR: ${dpr}x`;
-          navigator.clipboard.writeText(text).then(
-            () => App.toast("已复制", "ok"),
-            () => App.toast("复制失败", "error"),
-          );
+          const ok = await App.copyText(text);
+          App.toast(ok ? "已复制" : "复制失败", ok ? "ok" : "error");
         } }, "复制信息"),
       ),
     );
@@ -2390,9 +2388,15 @@
     const txt = App.h("span", { class: "mono" }, "未取色");
     const picked = { hex: "" };
     const out = App.toolOut({ saveName: "取色" });
+    const zoomSel = App.h("select", { class: "input", style: { width: "110px" } },
+      App.h("option", { value: "6" }, "6 倍"),
+      App.h("option", { value: "9" }, "9 倍（默认）"),
+      App.h("option", { value: "12" }, "12 倍"),
+      App.h("option", { value: "16" }, "16 倍"));
+    zoomSel.value = "9";
     async function run() {
       App.toast("取色器已打开：移动鼠标取色，左键/空格锁定并复制，ESC 取消", "info", 5000);
-      const r = await App.tryCall("tool_pick_color");
+      const r = await App.tryCall("tool_pick_color", parseInt(zoomSel.value, 10));
       if (!r.ok) { App.toast(r.err, "error", 6000); return; }
       const d = r.data;
       if (!d || !d.hex) { App.toast("已取消取色", "info"); return; }
@@ -2406,7 +2410,9 @@
     return pane(
       App.h("p", { class: "hint", style: { margin: "0 0 6px" } },
         "全屏放大预览 + 实时通道值；锁定后自动复制 HEX 到剪贴板。"),
-      actions(App.h("button", { class: "btn sm primary", onclick: run }, "打开取色器")),
+      actions(
+        App.h("span", { class: "field-label" }, "放大倍数："), zoomSel,
+        App.h("button", { class: "btn sm primary", onclick: run }, "打开取色器")),
       out.el,
     );
   }
@@ -2439,11 +2445,9 @@
             background: c.hex, border: "1px solid var(--border)",
             cursor: "pointer", title: c.hex + " · RGB(" + c.rgb.join(",") + ")\n点击复制",
           },
-          onclick: () => {
-            navigator.clipboard.writeText(c.hex).then(
-              () => App.toast("已复制 " + c.hex, "ok"),
-              () => App.toast("复制失败", "error"),
-            );
+          onclick: async () => {
+            const ok = await App.copyText(c.hex);
+            App.toast(ok ? "已复制 " + c.hex : "复制失败", ok ? "ok" : "error");
           },
         });
         const label = App.h("div", { class: "mono", style: { fontSize: "11px", textAlign: "center" } }, c.hex);

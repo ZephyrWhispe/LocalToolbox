@@ -18,12 +18,52 @@ class VideoFileHandler(SimpleHTTPRequestHandler):
             import urllib.parse
             requested = urllib.parse.unquote(self.path.lstrip('/'))
             if requested == os.path.basename(self.server.allowed_path):
-                self.send_response(200)
+                path = self.server.allowed_path
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                start, end, partial = 0, size - 1, False
+                rng = self.headers.get('Range')
+                if rng and rng.startswith('bytes='):
+                    try:
+                        spec = rng[len('bytes='):].split(',')[0].strip()
+                        s, _, e = spec.partition('-')
+                        if s:
+                            start = int(s)
+                            if e:
+                                end = int(e)
+                        elif e:                     # bytes=-N 后缀范围
+                            start = max(0, size - int(e))
+                        if start >= size or start > end:
+                            self.send_response(416)
+                            self.send_header('Content-Range', 'bytes */%d' % size)
+                            self.end_headers()
+                            return
+                        end = min(end, size - 1)
+                        partial = True
+                    except (ValueError, TypeError):
+                        start, end, partial = 0, size - 1, False
+                length = end - start + 1
+                self.send_response(206 if partial else 200)
                 self.send_header('Content-Type', 'video/mp4')
                 self.send_header('Accept-Ranges', 'bytes')
+                self.send_header('Content-Length', str(length))
+                if partial:
+                    self.send_header('Content-Range',
+                                     'bytes %d-%d/%d' % (start, end, size))
                 self.end_headers()
-                with open(self.server.allowed_path, 'rb') as f:
-                    self.wfile.write(f.read())
+                with open(path, 'rb') as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
                 return
         self.send_response(404)
         self.end_headers()
@@ -121,10 +161,12 @@ class VideoEditApi(BridgeBase):
         def _done(result):
             self.emit("video_trim_done", result)
 
-        threading.Thread(
-            target=lambda: __import__("app.core.video_edit", fromlist=["trim_video"]).trim_video(
-                self._video_path, float(start), float(end), out, _done),
-            daemon=True, name="video-trim").start()
+        from ..core.video_edit import trim_video
+
+        def worker():
+            trim_video(self._video_path, float(start), float(end), out, _done)
+
+        threading.Thread(target=worker, daemon=True, name="video-trim").start()
         return {"ok": True, "data": {"started": True}}
 
     def video_to_gif(self, fps=10, start=0, end=None, width=480):
@@ -140,11 +182,13 @@ class VideoEditApi(BridgeBase):
         def _done(result):
             self.emit("video_gif_done", result)
 
-        threading.Thread(
-            target=lambda: __import__("app.core.video_edit", fromlist=["video_to_gif"]).video_to_gif(
-                self._video_path, out, int(fps), float(start),
-                float(end) if end else None, int(width), on_done=_done),
-            daemon=True, name="video-to-gif").start()
+        from ..core.video_edit import video_to_gif as _video_to_gif
+
+        def worker():
+            _video_to_gif(self._video_path, out, int(fps), float(start),
+                          float(end) if end else None, int(width), on_done=_done)
+
+        threading.Thread(target=worker, daemon=True, name="video-to-gif").start()
         return {"ok": True, "data": {"started": True}}
 
     def video_extract_frame(self, time_sec):
@@ -160,8 +204,10 @@ class VideoEditApi(BridgeBase):
         def _done(result):
             self.emit("video_frame_done", result)
 
-        threading.Thread(
-            target=lambda: __import__("app.core.video_edit", fromlist=["extract_frame"]).extract_frame(
-                self._video_path, float(time_sec), out, _done),
-            daemon=True, name="video-frame").start()
+        from ..core.video_edit import extract_frame
+
+        def worker():
+            extract_frame(self._video_path, float(time_sec), out, _done)
+
+        threading.Thread(target=worker, daemon=True, name="video-frame").start()
         return {"ok": True, "data": {"started": True}}

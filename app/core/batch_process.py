@@ -32,9 +32,9 @@ class BatchProcessor:
         self._running = True
         self._progress = {"current": 0, "total": len(file_paths),
                           "path": "", "errors": []}
-        os.makedirs(output_dir, exist_ok=True)
         results = []
         try:
+            os.makedirs(output_dir, exist_ok=True)
             for i, src in enumerate(file_paths):
                 if self._cancel:
                     break
